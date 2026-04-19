@@ -1,4 +1,4 @@
-import { GitHubPRReviewPayload, GitHubWorkflowRunPayload, ReviewContext, TriggerContext } from '../../types';
+import { GitHubPRReviewPayload, GitHubWorkflowRunPayload, ReviewComment, ReviewContext, TriggerContext } from '../../types';
 import { log } from '../../utils/logger';
 import { fetchWorkflowRunInputs } from '../../utils/githubApi';
 
@@ -28,10 +28,12 @@ async function handlePRReview(payload: GitHubPRReviewPayload): Promise<ReviewCon
   }
 
   const ticketId = match[1];
-  const comments: string[] = [];
+  // TODO (Task 4.5): fetch real inline comments via GitHub API
+  // For now, wrap the top-level review body as a synthetic ReviewComment
+  const comments: ReviewComment[] = [];
 
   if (payload.review.body) {
-    comments.push(payload.review.body);
+    comments.push({ id: 0, path: '', line: null, body: payload.review.body, diffHunk: '' });
   }
 
   log('ROUTE', `PR #${payload.pull_request.number} → Review Agent (${ticketId}, CHANGES_REQUESTED)`);
