@@ -180,19 +180,14 @@ export interface PRComment {
 
 // ─── Playwright crawler ───────────────────────────────────────────────────────
 
-// A single node in the ARIA accessibility tree
-export interface AriaNode {
-  role: string;
-  name?: string;
-  description?: string;
-  children?: AriaNode[];
-}
-
-// Snapshot of a page captured by the Playwright crawler
+// Snapshot of a page captured by the Playwright crawler.
+// ariaTree is a YAML string from Playwright's ariaSnapshot({ mode: 'ai' }) —
+// the format is optimized for AI consumption and passed directly to agents.
 export interface PageSnapshot {
   url: string;
-  ariaTree: AriaNode;
+  ariaTree: string;               // ARIA YAML snapshot (Playwright 1.48+ ariaSnapshot API)
   testIds: string[];              // data-testid attribute values found on the page
+  locators: string[];             // pre-computed Playwright locators for all interactable elements
   htmlSample: string;             // first 500 chars of body outerHTML for fallback
 }
 
