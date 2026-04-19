@@ -40,6 +40,7 @@ function makeWorkflowRunPayload(overrides: Partial<GitHubWorkflowRunPayload> = {
       name: 'smoke.yml',
       conclusion: 'success',
       workflow_id: 111,
+      html_url: 'https://github.com/yourorg/klikagent-tests/actions/runs/9876543',
     },
     repository: {
       name: 'klikagent-tests',
@@ -99,7 +100,8 @@ describe('parseGitHubPayload — pull_request_review', () => {
 
   it('includes review body in comments array', async () => {
     const result = await parseGitHubPayload('pull_request_review', makePRReviewPayload()) as ReviewContext;
-    expect(result.comments).toContain('Test coverage missing for error state');
+    expect(result.comments).toHaveLength(1);
+    expect(result.comments[0].body).toBe('Test coverage missing for error state');
   });
 
   it('produces empty comments array when review body is null', async () => {
