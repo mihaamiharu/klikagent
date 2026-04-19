@@ -1,0 +1,32 @@
+{
+  "name": "klikagent",
+  "version": "1.0.0",
+  "description": "KlikAgent webhook listener — Phase 2",
+  "main": "dist/webhook/server.js",
+  "scripts": {
+    "dev": "nodemon --exec ts-node src/webhook/server.ts",
+    "build": "tsc",
+    "start": "node dist/webhook/server.js",
+    "test": "jest",
+    "test:watch": "jest --watch"
+  },
+  "jest": {
+    "preset": "ts-jest",
+    "testEnvironment": "node",
+    "testMatch": ["**/*.test.ts"]
+  },
+  "dependencies": {
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/jest": "^30.0.0",
+    "@types/node": "^20.11.0",
+    "jest": "^30.3.0",
+    "nodemon": "^3.0.2",
+    "ts-jest": "^29.4.9",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.3.3"
+  }
+}
