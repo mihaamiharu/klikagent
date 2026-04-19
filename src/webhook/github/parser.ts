@@ -1,8 +1,57 @@
-import { GitHubPRReviewPayload, GitHubWorkflowRunPayload, ReviewComment, ReviewContext, TriggerContext } from '../../types';
+import { GitHubIssue, GitHubIssueWebhookPayload, GitHubPRReviewPayload, GitHubWorkflowRunPayload, ReviewComment, ReviewContext, TriggerContext } from '../../types';
 import { log } from '../../utils/logger';
 import { fetchWorkflowRunInputs } from '../../utils/githubApi';
 
-const TICKET_FROM_BRANCH_RE = /^qa\/(KA-\d+)-/;
+const TICKET_FROM_BRANCH_RE = /^qa\/(\d+)-/;
+
+function handleIssueLabeled(payload: GitHubIssueWebhookPayload): TriggerContext | null {
+  if (payload.action !== 'labeled') {
+    log('SKIP', `issues — reason: action is "${payload.action}", not "labeled"`);
+    return null;
+  }
+
+  const labelName = payload.label?.name ?? '';
+  let flow: 1 | 2 | null = null;
+  if (labelName === 'status:in-progress') flow = 1;
+  else if (labelName === 'status:ready-for-qa') flow = 2;
+
+  if (!flow) {
+    log('SKIP', `issues #${payload.issue.number} — reason: label "${labelName}" is not a trigger`);
+    return null;
+  }
+
+  const labels = payload.issue.labels.map((l) => l.name);
+  const scopeLabel = labels.find((l) => l.startsWith('scope:'));
+  const scope = scopeLabel ? (scopeLabel.replace('scope:', '') as 'web' | 'api' | 'both') : 'none';
+  const isRework = labels.some((l) => l.startsWith('rework'));
+  const parentLabel = labels.find((l) => l.startsWith('parent:'));
+  const parentTicketId = parentLabel?.replace('parent:', '');
+
+  const issue: GitHubIssue = {
+    number: payload.issue.number,
+    title: payload.issue.title,
+    body: payload.issue.body ?? '',
+    url: payload.issue.html_url,
+    labels,
+  };
+
+  log('ROUTE', `issues #${issue.number} labeled "${labelName}" → Flow ${flow}`);
+
+  return {
+    flow,
+    ticketId: String(issue.number),
+    ticketSummary: issue.title,
+    ticketUrl: issue.url,
+    status: labelName,
+    previousStatus: '',
+    labels,
+    scope,
+    isRework,
+    parentTicketId,
+    issue,
+    timestamp: new Date().toISOString(),
+  };
+}
 
 async function handlePRReview(payload: GitHubPRReviewPayload): Promise<ReviewContext | null> {
   if (payload.action !== 'submitted') {
@@ -23,7 +72,7 @@ async function handlePRReview(payload: GitHubPRReviewPayload): Promise<ReviewCon
   const branch = payload.pull_request.head.ref;
   const match = branch.match(TICKET_FROM_BRANCH_RE);
   if (!match) {
-    log('SKIP', `PR #${payload.pull_request.number} — reason: branch name doesn't match qa/KA-* pattern`);
+    log('SKIP', `PR #${payload.pull_request.number} — reason: branch name doesn't match qa/{number}-* pattern`);
     return null;
   }
 
@@ -73,12 +122,13 @@ async function handleWorkflowRun(payload: GitHubWorkflowRunPayload): Promise<Tri
     ticketUrl: '',
     status: 'Done',
     previousStatus: '',
-    project: '',
     labels: [],
     scope: 'none',
     isRework: false,
     runId,
     runType: inputs.runType,
+    runConclusion: payload.workflow_run.conclusion,
+    runUrl: payload.workflow_run.html_url,
     timestamp: new Date().toISOString(),
   };
 
@@ -89,6 +139,10 @@ export async function parseGitHubPayload(
   eventType: string,
   payload: unknown
 ): Promise<TriggerContext | ReviewContext | null> {
+  if (eventType === 'issues') {
+    return handleIssueLabeled(payload as GitHubIssueWebhookPayload);
+  }
+
   if (eventType === 'pull_request_review') {
     return handlePRReview(payload as GitHubPRReviewPayload);
   }
