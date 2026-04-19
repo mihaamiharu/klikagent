@@ -3,31 +3,31 @@ import { log } from '../utils/logger';
 
 const GITHUB_API = 'https://api.github.com';
 
+export function ownerName(): string {
+  const o = process.env.GITHUB_OWNER;
+  if (!o) throw new Error('GITHUB_OWNER env var is not set');
+  return o;
+}
+
+export function mainRepo(): string {
+  const r = process.env.GITHUB_MAIN_REPO;
+  if (!r) throw new Error('GITHUB_MAIN_REPO env var is not set');
+  return r;
+}
+
+export function testRepoName(): string {
+  const r = process.env.GITHUB_TEST_REPO;
+  if (!r) throw new Error('GITHUB_TEST_REPO env var is not set');
+  return r;
+}
+
 function token(): string {
   const t = process.env.GITHUB_TOKEN;
   if (!t) throw new Error('GITHUB_TOKEN env var is not set');
   return t;
 }
 
-function testRepo(): string {
-  const r = process.env.GITHUB_TEST_REPO;
-  if (!r) throw new Error('GITHUB_TEST_REPO env var is not set');
-  return r;
-}
-
-function mainRepo(): string {
-  const r = process.env.GITHUB_MAIN_REPO;
-  if (!r) throw new Error('GITHUB_MAIN_REPO env var is not set');
-  return r;
-}
-
-function ownerName(): string {
-  const o = process.env.GITHUB_OWNER;
-  if (!o) throw new Error('GITHUB_OWNER env var is not set');
-  return o;
-}
-
-async function ghRequest(path: string, method = 'GET', body?: unknown): Promise<Response> {
+export async function ghRequest(path: string, method = 'GET', body?: unknown): Promise<Response> {
   const res = await fetch(`${GITHUB_API}${path}`, {
     method,
     headers: {
@@ -189,16 +189,14 @@ export async function openPR(
   branch: string,
   title: string,
   body: string,
-  draft = false
+  draft = false,
+  base = 'main'
 ): Promise<string> {
-  const repoRes = await ghRequest(`/repos/${ownerName()}/${repo}`);
-  const repoData = await repoRes.json() as { default_branch: string };
-
   const res = await ghRequest(`/repos/${ownerName()}/${repo}/pulls`, 'POST', {
     title,
     body,
     head: branch,
-    base: repoData.default_branch,
+    base,
     draft,
   });
   if (!res.ok) throw new Error(`openPR "${branch}": ${res.status} ${await res.text()}`);
@@ -224,7 +222,3 @@ export async function triggerWorkflow(
   log('INFO', `Dispatched ${workflow} on ${ref} with inputs: ${JSON.stringify(inputs)}`);
 }
 
-// ─── Convenience re-exports using env-configured repos ───────────────────────
-
-export const testRepoName = () => testRepo();
-export const mainRepoName = () => mainRepo();

@@ -59,33 +59,29 @@ async function authenticate(page: Page): Promise<void> {
   }
 }
 
-export async function captureSnapshot(url: string): Promise<PageSnapshot> {
+async function withAuthenticatedPage<T>(fn: (page: Page) => Promise<T>): Promise<T> {
   const browser = await chromium.launch();
   try {
     const context = await browser.newContext();
     const page = await context.newPage();
     await authenticate(page);
-    const snapshot = await capturePageSnapshot(page, url);
-    return snapshot;
+    return await fn(page);
   } finally {
     await browser.close();
   }
 }
 
-export async function captureSnapshots(urls: string[]): Promise<PageSnapshot[]> {
-  const browser = await chromium.launch();
-  try {
-    const context = await browser.newContext();
-    const page = await context.newPage();
-    await authenticate(page);
+export async function captureSnapshot(url: string): Promise<PageSnapshot> {
+  return withAuthenticatedPage((page) => capturePageSnapshot(page, url));
+}
 
+export async function captureSnapshots(urls: string[]): Promise<PageSnapshot[]> {
+  return withAuthenticatedPage(async (page) => {
     const snapshots: PageSnapshot[] = [];
     for (const url of urls) {
       log('INFO', `Crawler: capturing ${url}`);
       snapshots.push(await capturePageSnapshot(page, url));
     }
     return snapshots;
-  } finally {
-    await browser.close();
-  }
+  });
 }
