@@ -1,6 +1,7 @@
 import { GitHubIssue, PageSnapshot } from '../types';
 import { runAgent } from '../services/ai';
 import { enrichmentTools, enrichmentHandlers } from './tools';
+import { serializeSnapshots } from './snapshotUtils';
 
 const SYSTEM_PROMPT = `You are a senior QA engineer enriching a Playwright TypeScript test skeleton into a fully runnable spec.
 
@@ -19,21 +20,6 @@ Rules:
 - The affectedPaths field should list test folders impacted by the PR diff provided
 
 When done, call done() with enrichedSpec, pomContent, and affectedPaths.`;
-
-function serializeSnapshots(snapshots: PageSnapshot[]): string {
-  return snapshots.map((s) => `
-### Page: ${s.url}
-
-**ARIA Tree:**
-${s.ariaTree || '(empty)'}
-
-**Interactable Locators:**
-${s.locators.length ? s.locators.map((l) => `- ${l}`).join('\n') : '(none found)'}
-
-**data-testid attributes:**
-${s.testIds.length ? s.testIds.map((id) => `- ${id}`).join('\n') : '(none found)'}
-`).join('\n---\n');
-}
 
 function buildUserMessage(
   issue: GitHubIssue,

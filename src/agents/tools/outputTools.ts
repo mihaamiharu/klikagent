@@ -1,8 +1,5 @@
 import { AgentTool, ToolHandlers } from '../../types';
 
-// done() tool variants — one per agent type with strict output schemas.
-// validate_typescript is a stub that always passes for MVP.
-
 export const skeletonDoneTool: AgentTool = {
   type: 'function',
   function: {
@@ -79,7 +76,6 @@ export const reviewDoneTool: AgentTool = {
   },
 };
 
-// Stub — always passes. Real tsc validation is Phase 6.
 export const validateTypescriptTool: AgentTool = {
   type: 'function',
   function: {

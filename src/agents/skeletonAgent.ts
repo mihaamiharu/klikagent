@@ -4,7 +4,7 @@ import { skeletonTools, skeletonHandlers } from './tools';
 
 const SYSTEM_PROMPT = `You are a senior QA engineer writing Playwright TypeScript test skeletons for a web application.
 
-Your job is to generate a well-structured skeleton spec file based on the Jira acceptance criteria.
+Your job is to generate a well-structured skeleton spec file based on the GitHub Issue acceptance criteria.
 The skeleton should have the correct test structure but use TODO comments as placeholders for selectors and assertions.
 
 Rules:

@@ -1,6 +1,7 @@
 import { GitHubIssue, PageSnapshot } from '../types';
 import { runAgent } from '../services/ai';
 import { reworkTools, reworkHandlers } from './tools';
+import { serializeSnapshots } from './snapshotUtils';
 
 const SYSTEM_PROMPT = `You are a senior QA engineer applying a surgical patch to an existing Playwright test suite.
 
@@ -19,20 +20,6 @@ Patch rules:
 - Call validate_typescript before done()
 
 When done, call done() with patchedSpec (the full file with additions) and pomContent.`;
-
-function serializeSnapshots(snapshots: PageSnapshot[]): string {
-  return snapshots.map((s) => `
-### Page: ${s.url}
-**ARIA Tree:**
-${s.ariaTree || '(empty)'}
-
-**Interactable Locators:**
-${s.locators.length ? s.locators.map((l) => `- ${l}`).join('\n') : '(none found)'}
-
-**data-testid attributes:**
-${s.testIds.length ? s.testIds.map((id) => `- ${id}`).join('\n') : '(none found)'}
-`).join('\n---\n');
-}
 
 function buildUserMessage(
   subtask: GitHubIssue,
