@@ -22,7 +22,7 @@ function makePRReviewPayload(overrides: Partial<GitHubPRReviewPayload> = {}): Gi
     pull_request: {
       number: 14,
       draft: false,
-      head: { ref: 'qa/KA-42-login-form-validation' },
+      head: { ref: 'qa/42-login-form-validation' },
     },
     repository: {
       name: 'klikagent-tests',
@@ -73,7 +73,7 @@ describe('parseGitHubPayload — pull_request_review', () => {
     expect(result).toBeNull();
   });
 
-  it('returns null when branch does not match qa/KA-* pattern', async () => {
+  it('returns null when branch does not match qa/{number}-* pattern', async () => {
     const payload = makePRReviewPayload();
     payload.pull_request.head.ref = 'feature/login-form';
     const result = await parseGitHubPayload('pull_request_review', payload);
@@ -83,7 +83,7 @@ describe('parseGitHubPayload — pull_request_review', () => {
   it('extracts ticketId from branch name', async () => {
     const result = await parseGitHubPayload('pull_request_review', makePRReviewPayload()) as ReviewContext;
     expect(result).not.toBeNull();
-    expect(result.ticketId).toBe('KA-42');
+    expect(result.ticketId).toBe('42');
   });
 
   it('returns ReviewContext with correct fields for valid payload', async () => {
@@ -91,8 +91,8 @@ describe('parseGitHubPayload — pull_request_review', () => {
     expect(result).toMatchObject({
       prNumber: 14,
       repo: 'klikagent-tests',
-      branch: 'qa/KA-42-login-form-validation',
-      ticketId: 'KA-42',
+      branch: 'qa/42-login-form-validation',
+      ticketId: '42',
       reviewId: 999,
       reviewerLogin: 'reviewer-jane',
     });
@@ -122,7 +122,7 @@ describe('parseGitHubPayload — pull_request_review', () => {
 describe('parseGitHubPayload — workflow_run', () => {
   beforeEach(() => {
     mockFetchWorkflowRunInputs.mockResolvedValue({
-      ticketId: 'KA-42',
+      ticketId: '42',
       runType: 'smoke',
     });
   });
@@ -165,7 +165,7 @@ describe('parseGitHubPayload — workflow_run', () => {
     const result = await parseGitHubPayload('workflow_run', makeWorkflowRunPayload()) as TriggerContext;
     expect(result).toMatchObject({
       flow: 3,
-      ticketId: 'KA-42',
+      ticketId: '42',
       runId: 9876543,
       runType: 'smoke',
     });
