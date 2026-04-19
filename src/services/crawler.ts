@@ -1,6 +1,6 @@
 /// <reference lib="dom" />
 import { chromium, Page } from 'playwright';
-import { AriaNode, PageSnapshot } from '../types';
+import { PageSnapshot } from '../types';
 import { log } from '../utils/logger';
 
 const QA_BASE_URL = () => process.env.QA_BASE_URL ?? 'http://localhost:3000';
@@ -24,22 +24,15 @@ async function capturePageSnapshot(page: Page, url: string): Promise<PageSnapsho
   await page.goto(url, { waitUntil: 'networkidle', timeout: 30_000 });
   await revealPass(page);
 
-  // accessibility.snapshot() deprecated in Playwright 1.48+ — use ariaSnapshot on root
-  const ariaTree = await page.locator('body').ariaSnapshot({ timeout: 5_000 })
-    .then((yaml) => ({ role: 'WebArea', name: url, children: [{ role: 'generic', name: yaml }] } as AriaNode))
-    .catch(() => ({ role: 'WebArea', name: url, children: [] } as AriaNode));
+  const ariaTree = await page.locator('body').ariaSnapshot({ mode: 'ai', timeout: 5_000 })
+    .catch(() => '');
 
   const testIds = await page.$$eval('[data-testid]', (els) =>
     els.map((el) => el.getAttribute('data-testid') ?? '').filter(Boolean)
   );
   const bodyHtml = await page.$eval('body', (el) => el.outerHTML).catch(() => '');
 
-  return {
-    url,
-    ariaTree: ariaTree ?? { role: 'WebArea', name: '', children: [] },
-    testIds,
-    htmlSample: htmlSample(bodyHtml),
-  };
+  return { url, ariaTree, testIds, htmlSample: htmlSample(bodyHtml) };
 }
 
 async function authenticate(page: Page): Promise<void> {
