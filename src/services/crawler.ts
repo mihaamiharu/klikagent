@@ -16,6 +16,87 @@ async function revealPass(page: Page): Promise<void> {
   await page.waitForTimeout(300);
 }
 
+// Compute the best Playwright locator string for every interactable element on the page.
+// Priority: getByTestId > getByLabel > getByPlaceholder > getByRole(+name) > getByText
+// Mirrors what the Playwright inspector shows when you hover over elements in codegen.
+async function extractLocators(page: Page): Promise<string[]> {
+  return page.evaluate(() => {
+    const INTERACTIVE = 'button, a[href], input, select, textarea, [role="button"], [role="link"], [role="checkbox"], [role="radio"], [role="tab"], [role="menuitem"], [role="option"], [role="combobox"], [role="textbox"], [role="switch"]';
+
+    const TAG_TO_ROLE: Record<string, string> = {
+      button: 'button',
+      a: 'link',
+      select: 'combobox',
+      textarea: 'textbox',
+    };
+
+    function inputRole(el: HTMLInputElement): string {
+      const map: Record<string, string> = {
+        checkbox: 'checkbox', radio: 'radio', range: 'slider',
+        search: 'searchbox', spinbutton: 'spinbutton',
+      };
+      return map[el.type] ?? 'textbox';
+    }
+
+    function getRole(el: Element): string {
+      const explicit = el.getAttribute('role');
+      if (explicit) return explicit;
+      const tag = el.tagName.toLowerCase();
+      if (tag === 'input') return inputRole(el as HTMLInputElement);
+      return TAG_TO_ROLE[tag] ?? tag;
+    }
+
+    function safeName(s: string): string {
+      return s.trim().replace(/'/g, "\\'").slice(0, 60);
+    }
+
+    function bestLocator(el: Element): string | null {
+      // 1. data-testid
+      const testId = el.getAttribute('data-testid');
+      if (testId) return `getByTestId('${safeName(testId)}')`;
+
+      const role = getRole(el);
+
+      // 2. aria-label
+      const ariaLabel = el.getAttribute('aria-label');
+      if (ariaLabel) return `getByRole('${role}', { name: '${safeName(ariaLabel)}' })`;
+
+      // 3. label association (inputs)
+      const id = el.getAttribute('id');
+      if (id) {
+        const label = document.querySelector<HTMLElement>(`label[for="${id}"]`);
+        const labelText = label?.textContent?.trim();
+        if (labelText) return `getByLabel('${safeName(labelText)}')`;
+      }
+
+      // 4. placeholder
+      const placeholder = (el as HTMLInputElement).placeholder;
+      if (placeholder) return `getByPlaceholder('${safeName(placeholder)}')`;
+
+      // 5. visible text (buttons and links only)
+      const text = el.textContent?.trim();
+      if (text && text.length <= 60 && (role === 'button' || role === 'link')) {
+        return `getByRole('${role}', { name: '${safeName(text)}' })`;
+      }
+
+      return null;
+    }
+
+    const seen = new Set<string>();
+    const locators: string[] = [];
+
+    document.querySelectorAll(INTERACTIVE).forEach((el) => {
+      const locator = bestLocator(el);
+      if (locator && !seen.has(locator)) {
+        seen.add(locator);
+        locators.push(locator);
+      }
+    });
+
+    return locators;
+  });
+}
+
 function htmlSample(html: string): string {
   return html.slice(0, 500);
 }
@@ -24,15 +105,14 @@ async function capturePageSnapshot(page: Page, url: string): Promise<PageSnapsho
   await page.goto(url, { waitUntil: 'networkidle', timeout: 30_000 });
   await revealPass(page);
 
-  const ariaTree = await page.locator('body').ariaSnapshot({ mode: 'ai', timeout: 5_000 })
-    .catch(() => '');
+  const [ariaTree, testIds, locators, bodyHtml] = await Promise.all([
+    page.locator('body').ariaSnapshot({ mode: 'ai', timeout: 5_000 }).catch(() => ''),
+    page.$$eval('[data-testid]', (els) => els.map((el) => el.getAttribute('data-testid') ?? '').filter(Boolean)),
+    extractLocators(page),
+    page.$eval('body', (el) => el.outerHTML).catch(() => ''),
+  ]);
 
-  const testIds = await page.$$eval('[data-testid]', (els) =>
-    els.map((el) => el.getAttribute('data-testid') ?? '').filter(Boolean)
-  );
-  const bodyHtml = await page.$eval('body', (el) => el.outerHTML).catch(() => '');
-
-  return { url, ariaTree, testIds, htmlSample: htmlSample(bodyHtml) };
+  return { url, ariaTree, testIds, locators, htmlSample: htmlSample(bodyHtml) };
 }
 
 async function authenticate(page: Page): Promise<void> {

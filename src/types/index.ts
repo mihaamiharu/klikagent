@@ -187,6 +187,7 @@ export interface PageSnapshot {
   url: string;
   ariaTree: string;               // ARIA YAML snapshot (Playwright 1.48+ ariaSnapshot API)
   testIds: string[];              // data-testid attribute values found on the page
+  locators: string[];             // pre-computed Playwright locators for all interactable elements
   htmlSample: string;             // first 500 chars of body outerHTML for fallback
 }
 
