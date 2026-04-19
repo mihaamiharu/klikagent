@@ -1,8 +1,6 @@
 import { TriggerContext } from '../../types';
 import { log } from '../../utils/logger';
-import { flow1 } from '../../flows/flow1';
-import { flow2 } from '../../flows/flow2';
-import { flow3 } from '../../flows/flow3';
+import { flow1, flow2, flow3 } from '../../orchestrator';
 
 export async function routeToFlow(context: TriggerContext): Promise<void> {
   log('ROUTE', `${context.ticketId} → Flow ${context.flow} (${context.status}, scope:${context.scope}, isRework: ${context.isRework})`);

@@ -79,9 +79,12 @@ export interface TriggerContext {
   isRework: boolean;              // true if issue has rework:* label
   parentTicketId?: string;        // parent issue number if rework subtask
   project?: string;               // @deprecated — Jira project key (removed in Task 4.5)
+  issue?: GitHubIssue;           // full issue object (passed from issues webhook, avoids re-fetch)
   // Flow 3 only — populated from workflow_run event
   runId?: number;                 // GitHub Actions run ID
   runType?: 'new-tests' | 'affected' | 'smoke';
+  runConclusion?: string;        // "success" | "failure" | "cancelled" etc.
+  runUrl?: string;               // GitHub Actions run URL for linking in comments
   timestamp: string;              // ISO 8601
 }
 
