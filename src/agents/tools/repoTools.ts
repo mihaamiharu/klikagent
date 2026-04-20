@@ -112,6 +112,14 @@ export const repoToolDefs: AgentTool[] = [
   {
     type: 'function',
     function: {
+      name: 'list_available_poms',
+      description: 'List all existing Page Object Model files in klikagent-tests/pages/. Use this before writing imports to ensure you only import POMs that actually exist.',
+      parameters: { type: 'object', properties: {}, required: [] },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'get_tsconfig',
       description: 'Get the tsconfig.json from klikagent-tests.',
       parameters: { type: 'object', properties: {}, required: [] },
@@ -149,6 +157,10 @@ export const repoToolHandlers: ToolHandlers = {
     await testRepo.getCurrentPOM(args.branch as string, args.feature as string) ?? '(no POM on branch)',
   get_parent_spec: async (args) =>
     await testRepo.getParentSpec(args.branch as string, args.parentTicketId as string, args.feature as string) ?? '(no parent spec found)',
+  list_available_poms: async () => {
+    const poms = await testRepo.listAllPOMs();
+    return poms.length > 0 ? poms.join('\n') : '(no POM files found)';
+  },
   get_tsconfig: async () => await testRepo.getTsConfig(),
   get_playwright_config: async () => await testRepo.getPlaywrightConfig(),
 };
