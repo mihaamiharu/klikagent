@@ -28,41 +28,6 @@ export interface GitHubIssue {
   labels: string[];
 }
 
-// ─── Jira (kept for Phase 2 backward compat — deleted in Task 4.5) ────────────
-
-// Raw Jira webhook payload (subset of fields we care about)
-export interface JiraWebhookPayload {
-  webhookEvent: string;           // e.g. "jira:issue_updated"
-  issue: {
-    key: string;                  // e.g. "KA-42"
-    self: string;                 // full API URL to the issue
-    fields: {
-      summary: string;
-      status: {
-        name: string;             // e.g. "In Progress"
-      };
-      project: {
-        key: string;              // e.g. "KA"
-      };
-      labels: string[];           // e.g. ["scope:web", "scope:api"]
-      description?: string;
-      issuetype: {
-        name: string;             // e.g. "Story", "Bug", "Rework"
-      };
-      parent?: {
-        key: string;              // e.g. "KA-40" — parent ticket if exists
-      };
-    };
-  };
-  changelog?: {
-    items: Array<{
-      field: string;              // e.g. "status"
-      fromString: string;         // previous status name
-      toString: string;           // new status name
-    }>;
-  };
-}
-
 // ─── Trigger context ──────────────────────────────────────────────────────────
 
 // Clean handoff object passed to the orchestrator
@@ -78,7 +43,6 @@ export interface TriggerContext {
   scope: 'web' | 'api' | 'both' | 'none';  // parsed from scope:* label
   isRework: boolean;              // true if issue has rework:* label
   parentTicketId?: string;        // parent issue number if rework subtask
-  project?: string;               // @deprecated — Jira project key (removed in Task 4.5)
   issue?: GitHubIssue;           // full issue object (passed from issues webhook, avoids re-fetch)
   // Flow 3 only — populated from workflow_run event
   runId?: number;                 // GitHub Actions run ID

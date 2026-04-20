@@ -2,45 +2,12 @@ import { Request } from 'express';
 import * as crypto from 'crypto';
 import { log } from '../utils/logger';
 
-export function validatePayload(req: Request, source: 'jira' | 'github'): boolean {
+export function validatePayload(req: Request, source: 'github'): boolean {
   const rawBody: Buffer = req.body as Buffer;
 
   if (!Buffer.isBuffer(rawBody)) {
     log('ERROR', `validatePayload: req.body is not a Buffer (got ${typeof rawBody}) — check raw body middleware`);
     return false;
-  }
-
-  if (source === 'jira') {
-    const secret = process.env.JIRA_WEBHOOK_SECRET;
-
-    if (!secret) {
-      log('WARN', 'JIRA_WEBHOOK_SECRET not set — skipping validation (dev mode)');
-      return true;
-    }
-
-    const signatureHeader = req.headers['x-hub-signature'] as string | undefined;
-    if (!signatureHeader) {
-      log('WARN', 'Missing x-hub-signature header on Jira webhook');
-      return false;
-    }
-
-    const hmac = crypto.createHmac('sha256', secret);
-    hmac.update(rawBody);
-    const computed = hmac.digest('hex');
-
-    // Header may be prefixed with "sha256="
-    const provided = signatureHeader.startsWith('sha256=')
-      ? signatureHeader.slice(7)
-      : signatureHeader;
-
-    try {
-      return crypto.timingSafeEqual(
-        Buffer.from(computed, 'hex'),
-        Buffer.from(provided, 'hex')
-      );
-    } catch {
-      return false;
-    }
   }
 
   if (source === 'github') {
@@ -69,7 +36,8 @@ export function validatePayload(req: Request, source: 'jira' | 'github'): boolea
         Buffer.from(computed),
         Buffer.from(provided)
       );
-    } catch {
+    } catch (err) {
+      log('ERROR', `GitHub HMAC comparison failed: ${(err as Error).message} — computed="${computed}" provided="${provided}"`);
       return false;
     }
   }
