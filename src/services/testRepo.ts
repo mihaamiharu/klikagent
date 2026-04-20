@@ -56,6 +56,17 @@ export async function getExistingPOMNames(feature: string): Promise<string[]> {
   return listDir(`pages/${feature}`);
 }
 
+export async function listAllPOMs(): Promise<string[]> {
+  const features = await listDir('pages');
+  const results = await Promise.all(
+    features.map(async (f) => {
+      const files = await listDir(`pages/${f}`);
+      return files.filter((n) => n.endsWith('Page.ts')).map((n) => `pages/${f}/${n}`);
+    })
+  );
+  return results.flat();
+}
+
 export async function getExistingPOM(feature: string): Promise<string | null> {
   const pomFile = await findPOMFile(feature);
   return pomFile ? readFile(`pages/${feature}/${pomFile}`) : null;

@@ -16,6 +16,7 @@ Rules:
 - POM file goes in: pages/{feature}/{Feature}Page.ts
 - Spec imports from the POM using relative paths
 - Use relative imports — never @pages, @helpers, @data aliases
+- CRITICAL: Call list_available_poms before writing any imports. Only import POM classes that appear in that list OR that you are creating as pomContent. NEVER import a POM that does not exist in the list — this will break CI.
 - Call validate_typescript before done() to confirm the code is valid
 - The affectedPaths field should list test folders impacted by the PR diff provided
 
@@ -46,12 +47,13 @@ ${prDiff || '(no diff available)'}
 ## Your task
 1. Use get_skeleton_spec (branch: "${branch}", ticketId: "${issue.number}", feature: "${feature}") to read the skeleton
 2. Use get_existing_pom to read any existing POM for this feature
-3. Use get_context_docs and get_fixtures for project conventions
-4. Enrich the skeleton with real selectors from the page snapshots above
-5. Write or update the POM at pages/${feature}/${feature.charAt(0).toUpperCase() + feature.slice(1)}Page.ts
-6. Determine affectedPaths from the PR diff
-7. Call validate_typescript with your spec to confirm it compiles
-8. Call done() with enrichedSpec, pomContent, and affectedPaths
+3. Use list_available_poms to see ALL page objects that currently exist — you may only import from this list or from the POM you are creating
+4. Use get_context_docs and get_fixtures for project conventions
+5. Enrich the skeleton with real selectors from the page snapshots above
+6. Write or update the POM at pages/${feature}/${feature.charAt(0).toUpperCase() + feature.slice(1)}Page.ts
+7. Determine affectedPaths from the PR diff
+8. Call validate_typescript with your spec to confirm it compiles
+9. Call done() with enrichedSpec, pomContent, and affectedPaths
 `.trim();
 }
 
