@@ -4,6 +4,9 @@ on:
   pull_request:
     branches:
       - main
+  push:
+    branches:
+      - main
 
 jobs:
   test:
@@ -23,3 +26,26 @@ jobs:
 
       - name: Run tests
         run: npm test
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Deploy to VPS
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: 103.235.75.99
+          username: deploy
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          script: |
+            set -e
+            DEPLOY_DIR=~/apps/klikagent
+            if [ ! -d "$DEPLOY_DIR" ]; then
+              git clone https://github.com/mihaamiharu/klikagent.git "$DEPLOY_DIR"
+            fi
+            cd "$DEPLOY_DIR"
+            git pull origin main
+            docker compose up --build -d
+            docker image prune -f
