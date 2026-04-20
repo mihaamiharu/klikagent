@@ -1,45 +1,11 @@
 import 'dotenv/config';
 import express, { Request, Response } from 'express';
 import { validatePayload } from './validator';
-import { parseJiraPayload } from './jira/parser';
-import { routeToFlow } from './jira/router';
 import { parseGitHubPayload } from './github/parser';
 import { routeGitHubEvent } from './github/router';
-import { JiraWebhookPayload } from '../types';
 import { log } from '../utils/logger';
 
 const app = express();
-
-// Use raw body middleware on both routes so HMAC can be computed against the raw bytes
-app.post('/webhook/jira', express.raw({ type: '*/*' }), async (req: Request, res: Response) => {
-  log('INFO', `POST /webhook/jira`);
-
-  if (!validatePayload(req, 'jira')) {
-    log('WARN', `POST /webhook/jira — invalid signature, rejecting`);
-    res.status(401).json({ error: 'Invalid signature' });
-    return;
-  }
-
-  let payload: JiraWebhookPayload;
-  try {
-    payload = JSON.parse((req.body as Buffer).toString('utf8')) as JiraWebhookPayload;
-  } catch {
-    res.status(400).json({ error: 'Invalid JSON' });
-    return;
-  }
-
-  const context = parseJiraPayload(payload);
-  if (context === null) {
-    res.status(200).json({ skipped: true });
-    return;
-  }
-
-  // Respond immediately, process asynchronously
-  res.status(200).json({ received: true });
-  routeToFlow(context).catch((err: Error) => {
-    log('ERROR', `Unhandled error in routeToFlow for ${context.ticketId}: ${err.message}`);
-  });
-});
 
 app.post('/webhook/github', express.raw({ type: '*/*' }), async (req: Request, res: Response) => {
   const eventType = req.headers['x-github-event'] as string | undefined;
