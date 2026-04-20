@@ -1,3 +1,4 @@
+import * as ts from 'typescript';
 import { AgentTool, ToolHandlers } from '../../types';
 
 export const skeletonDoneTool: AgentTool = {
@@ -92,5 +93,26 @@ export const validateTypescriptTool: AgentTool = {
 };
 
 export const validateTypescriptHandler: ToolHandlers = {
-  validate_typescript: async () => JSON.stringify({ valid: true, errors: [] }),
+  validate_typescript: async (args) => {
+    const code = args.code as string;
+    const sourceFile = ts.createSourceFile('check.ts', code, ts.ScriptTarget.Latest, true);
+    const diagnostics = (sourceFile as unknown as { parseDiagnostics?: ts.Diagnostic[] }).parseDiagnostics ?? [];
+    const errors = diagnostics.map((d) => ({
+      line: d.file ? d.file.getLineAndCharacterOfPosition(d.start ?? 0).line + 1 : 0,
+      message: ts.flattenDiagnosticMessageText(d.messageText, '\n'),
+    }));
+    // Also check for known invalid Playwright patterns that tsc won't catch
+    const invalidPatterns: Array<{ pattern: RegExp; hint: string }> = [
+      {
+        pattern: /expect\([^)]+\)\.(toContainText|toHaveText|toBeVisible|toBeDisabled|toBeEnabled|toHaveValue)\([^)]*\)\.or\(/,
+        hint: 'expect(...).or() is not valid Playwright — use locator.or(otherLocator) on the locator itself, or use a regex in toContainText(/a|b/)',
+      },
+    ];
+    for (const { pattern, hint } of invalidPatterns) {
+      if (pattern.test(code)) {
+        errors.push({ line: 0, message: hint });
+      }
+    }
+    return JSON.stringify({ valid: errors.length === 0, errors });
+  },
 };
