@@ -5,6 +5,11 @@ import { log } from '../utils/logger';
 export function validatePayload(req: Request, source: 'jira' | 'github'): boolean {
   const rawBody: Buffer = req.body as Buffer;
 
+  if (!Buffer.isBuffer(rawBody)) {
+    log('ERROR', `validatePayload: req.body is not a Buffer (got ${typeof rawBody}) — check raw body middleware`);
+    return false;
+  }
+
   if (source === 'jira') {
     const secret = process.env.JIRA_WEBHOOK_SECRET;
 

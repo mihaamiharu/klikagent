@@ -11,7 +11,7 @@ import { log } from '../utils/logger';
 const app = express();
 
 // Use raw body middleware on both routes so HMAC can be computed against the raw bytes
-app.post('/webhook/jira', express.raw({ type: 'application/json' }), async (req: Request, res: Response) => {
+app.post('/webhook/jira', express.raw({ type: '*/*' }), async (req: Request, res: Response) => {
   log('INFO', `POST /webhook/jira`);
 
   if (!validatePayload(req, 'jira')) {
@@ -40,7 +40,7 @@ app.post('/webhook/jira', express.raw({ type: 'application/json' }), async (req:
   });
 });
 
-app.post('/webhook/github', express.raw({ type: 'application/json' }), async (req: Request, res: Response) => {
+app.post('/webhook/github', express.raw({ type: '*/*' }), async (req: Request, res: Response) => {
   const eventType = req.headers['x-github-event'] as string | undefined;
   log('INFO', `POST /webhook/github (${eventType ?? 'unknown'})`);
 
