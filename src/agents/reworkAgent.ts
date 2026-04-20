@@ -1,5 +1,5 @@
 import { GitHubIssue, PageSnapshot } from '../types';
-import { runAgent } from '../services/ai';
+import { runAgent, TokenUsage } from '../services/ai';
 import { reworkTools, reworkHandlers } from './tools';
 import { serializeSnapshots } from './snapshotUtils';
 
@@ -61,15 +61,16 @@ export async function runReworkAgent(
   feature: string,
   branch: string,
   snapshots: PageSnapshot[]
-): Promise<{ patchedSpec: string; pomContent: string }> {
-  const result = await runAgent(
+): Promise<{ patchedSpec: string; pomContent: string; tokenUsage: TokenUsage }> {
+  const { args, tokenUsage } = await runAgent(
     SYSTEM_PROMPT,
     buildUserMessage(subtask, parentTicket, feature, branch, snapshots),
     reworkTools,
     reworkHandlers
   );
   return {
-    patchedSpec: result.patchedSpec as string,
-    pomContent: result.pomContent as string,
+    patchedSpec: args.patchedSpec as string,
+    pomContent: args.pomContent as string,
+    tokenUsage,
   };
 }

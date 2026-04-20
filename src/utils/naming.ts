@@ -25,3 +25,8 @@ export function toReworkBranch(parentId: string, round: number): string {
 export function toPRTitle(ticketId: string, summary: string): string {
   return `[KlikAgent] ${ticketId}: ${summary}`;
 }
+
+// 42-short-summary.spec.ts
+export function toSpecFileName(ticketId: string, title: string): string {
+  return `${ticketId}-${slugify(title)}.spec.ts`;
+}

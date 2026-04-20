@@ -1,5 +1,5 @@
 import { GitHubIssue, PageSnapshot } from '../types';
-import { runAgent } from '../services/ai';
+import { runAgent, TokenUsage } from '../services/ai';
 import { enrichmentTools, enrichmentHandlers } from './tools';
 import { serializeSnapshots } from './snapshotUtils';
 
@@ -63,16 +63,17 @@ export async function runEnrichmentAgent(
   branch: string,
   snapshots: PageSnapshot[],
   prDiff: string
-): Promise<{ enrichedSpec: string; pomContent: string; affectedPaths: string }> {
-  const result = await runAgent(
+): Promise<{ enrichedSpec: string; pomContent: string; affectedPaths: string; tokenUsage: TokenUsage }> {
+  const { args, tokenUsage } = await runAgent(
     SYSTEM_PROMPT,
     buildUserMessage(issue, feature, branch, snapshots, prDiff),
     enrichmentTools,
     enrichmentHandlers
   );
   return {
-    enrichedSpec: result.enrichedSpec as string,
-    pomContent: result.pomContent as string,
-    affectedPaths: result.affectedPaths as string,
+    enrichedSpec: args.enrichedSpec as string,
+    pomContent: args.pomContent as string,
+    affectedPaths: args.affectedPaths as string,
+    tokenUsage,
   };
 }

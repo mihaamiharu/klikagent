@@ -18,15 +18,26 @@ export interface RunAgentOptions {
   maxIterations?: number;
 }
 
+export interface TokenUsage {
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+}
+
+export interface AgentRunResult {
+  args: Record<string, unknown>;
+  tokenUsage: TokenUsage;
+}
+
 // Provider-agnostic agent tool loop using OpenAI-compatible API (works with Minimax).
-// Runs until the agent calls done(), then returns done()'s parsed arguments.
+// Runs until the agent calls done(), then returns done()'s parsed arguments plus token usage.
 export async function runAgent(
   systemPrompt: string,
   userMessage: string,
   tools: AgentTool[],
   toolHandlers: ToolHandlers,
   options: RunAgentOptions = {}
-): Promise<Record<string, unknown>> {
+): Promise<AgentRunResult> {
   const client = makeClient();
   const model = options.model ?? process.env.AI_MODEL ?? 'MiniMax-M2.7';
   const maxTokens = options.maxTokens ?? 8192;
@@ -36,6 +47,9 @@ export async function runAgent(
     { role: 'system', content: systemPrompt },
     { role: 'user', content: userMessage },
   ];
+
+  let promptTokens = 0;
+  let completionTokens = 0;
 
   for (let iteration = 0; iteration < maxIterations; iteration++) {
     log('INFO', `[AI] iteration ${iteration + 1}/${maxIterations}`);
@@ -47,6 +61,11 @@ export async function runAgent(
       tool_choice: 'auto',
       messages,
     });
+
+    if (response.usage) {
+      promptTokens += response.usage.prompt_tokens;
+      completionTokens += response.usage.completion_tokens;
+    }
 
     const choice = response.choices[0];
     const assistantMessage = choice.message;
@@ -70,7 +89,13 @@ export async function runAgent(
 
       // done() exits the loop
       if (name === 'done') {
-        return args;
+        const tokenUsage: TokenUsage = {
+          promptTokens,
+          completionTokens,
+          totalTokens: promptTokens + completionTokens,
+        };
+        log('INFO', `[AI] tokens used — prompt: ${promptTokens}, completion: ${completionTokens}, total: ${tokenUsage.totalTokens}`);
+        return { args, tokenUsage };
       }
 
       const handler = toolHandlers[name];
