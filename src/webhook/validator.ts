@@ -69,7 +69,8 @@ export function validatePayload(req: Request, source: 'jira' | 'github'): boolea
         Buffer.from(computed),
         Buffer.from(provided)
       );
-    } catch {
+    } catch (err) {
+      log('ERROR', `GitHub HMAC comparison failed: ${(err as Error).message} — computed="${computed}" provided="${provided}"`);
       return false;
     }
   }

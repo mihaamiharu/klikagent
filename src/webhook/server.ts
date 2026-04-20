@@ -15,6 +15,7 @@ app.post('/webhook/jira', express.raw({ type: '*/*' }), async (req: Request, res
   log('INFO', `POST /webhook/jira`);
 
   if (!validatePayload(req, 'jira')) {
+    log('WARN', `POST /webhook/jira — invalid signature, rejecting`);
     res.status(401).json({ error: 'Invalid signature' });
     return;
   }
@@ -45,6 +46,7 @@ app.post('/webhook/github', express.raw({ type: '*/*' }), async (req: Request, r
   log('INFO', `POST /webhook/github (${eventType ?? 'unknown'})`);
 
   if (!validatePayload(req, 'github')) {
+    log('WARN', `POST /webhook/github — invalid signature, rejecting`);
     res.status(401).json({ error: 'Invalid signature' });
     return;
   }
