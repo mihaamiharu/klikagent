@@ -43,6 +43,7 @@ describe('runAgent', () => {
   let mockCreate: jest.Mock;
 
   beforeEach(() => {
+    jest.useFakeTimers();
     process.env.AI_API_KEY = 'test-key';
     process.env.AI_BASE_URL = 'https://test.api';
     process.env.AI_MODEL = 'test-model';
@@ -54,6 +55,7 @@ describe('runAgent', () => {
   });
 
   afterEach(() => {
+    jest.useRealTimers();
     delete process.env.AI_API_KEY;
     delete process.env.AI_BASE_URL;
     delete process.env.AI_MODEL;
@@ -120,7 +122,78 @@ describe('runAgent', () => {
     expect(mockCreate).toHaveBeenCalledTimes(2);
   });
 
+  // ─── Retry behaviour ─────────────────────────────────────────────────────
+
+  it('retries on 529 and succeeds on the next attempt', async () => {
+    const busyError = Object.assign(new Error('service busy'), { status: 529 });
+    mockCreate
+      .mockRejectedValueOnce(busyError)
+      .mockResolvedValueOnce(makeToolCallResponse('done', { result: 'ok' }));
+
+    const promise = runAgent('sys', 'msg', [], {});
+    await jest.runAllTimersAsync();
+    const { args } = await promise;
+
+    expect(args).toEqual({ result: 'ok' });
+    expect(mockCreate).toHaveBeenCalledTimes(2);
+  });
+
+  it('retries on 429 and 503 as well', async () => {
+    const err429 = Object.assign(new Error('rate limited'), { status: 429 });
+    const err503 = Object.assign(new Error('unavailable'), { status: 503 });
+    mockCreate
+      .mockRejectedValueOnce(err429)
+      .mockRejectedValueOnce(err503)
+      .mockResolvedValueOnce(makeToolCallResponse('done', { result: 'ok' }));
+
+    const promise = runAgent('sys', 'msg', [], {});
+    await jest.runAllTimersAsync();
+    const { args } = await promise;
+
+    expect(args).toEqual({ result: 'ok' });
+    expect(mockCreate).toHaveBeenCalledTimes(3);
+  });
+
+  it('throws immediately on a non-retryable error', async () => {
+    const err400 = Object.assign(new Error('bad request'), { status: 400 });
+    mockCreate.mockRejectedValueOnce(err400);
+
+    await expect(runAgent('sys', 'msg', [], {})).rejects.toThrow('bad request');
+    expect(mockCreate).toHaveBeenCalledTimes(1);
+  });
+
+  it('throws after exhausting all retries on a persistent transient error', async () => {
+    const busyError = Object.assign(new Error('still busy'), { status: 529 });
+    mockCreate.mockRejectedValue(busyError);
+
+    const promise = runAgent('sys', 'msg', [], {}, { maxIterations: 1 });
+    const assertion = expect(promise).rejects.toThrow('still busy');
+    await jest.runAllTimersAsync();
+    await assertion;
+    // DEFAULT_MAX_RETRIES = 4 → 5 total attempts (0..4)
+    expect(mockCreate).toHaveBeenCalledTimes(5);
+  });
+
   // ─── Error cases ─────────────────────────────────────────────────────────
+
+  it('recovers from finish_reason: length by injecting a continuation prompt', async () => {
+    mockCreate
+      .mockResolvedValueOnce({
+        choices: [{ finish_reason: 'length', message: { role: 'assistant', content: 'partial...', tool_calls: undefined } }],
+        usage: { prompt_tokens: 100, completion_tokens: 200 },
+      })
+      .mockResolvedValueOnce(makeToolCallResponse('done', { result: 'recovered' }, { prompt_tokens: 150, completion_tokens: 50 }));
+
+    const { args, tokenUsage } = await runAgent('sys', 'msg', [], {});
+
+    expect(args).toEqual({ result: 'recovered' });
+    expect(mockCreate).toHaveBeenCalledTimes(2);
+    // Recovery prompt is injected as the 4th message (index 3): sys, user, assistant(truncated), user(recovery)
+    // Note: the messages array is mutated in-place after each iteration, so we check index 3 directly
+    const secondCallMessages = mockCreate.mock.calls[1][0].messages as Array<{ role: string; content: string }>;
+    expect(secondCallMessages[3]).toMatchObject({ role: 'user', content: expect.stringContaining('cut off') });
+    expect(tokenUsage.totalTokens).toBe(500);
+  });
 
   it('throws when model stops without calling a tool', async () => {
     mockCreate.mockResolvedValueOnce({

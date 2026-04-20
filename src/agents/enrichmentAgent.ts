@@ -17,8 +17,14 @@ Rules:
 - Spec imports from the POM using relative paths
 - Use relative imports — never @pages, @helpers, @data aliases
 - CRITICAL: Call list_available_poms before writing any imports. Only import POM classes that appear in that list OR that you are creating as pomContent. NEVER import a POM that does not exist in the list — this will break CI.
-- Call validate_typescript before done() to confirm the code is valid
+- Call validate_typescript before done() to confirm the code is valid. If it returns errors, fix them before calling done().
 - The affectedPaths field should list test folders impacted by the PR diff provided
+- Do NOT call the same tool twice with the same arguments — cache results from the first call
+
+Playwright API rules (violations will be caught by validate_typescript):
+- NEVER use expect(...).or() — this method does not exist on expect. For OR assertions use locator.or(): \`locator1.or(locator2)\`, or use a regex: \`expect(el).toContainText(/value1|value2/)\`
+- NEVER chain .or() after expect(...).toContainText(...) or any other expect assertion
+- locator.or(other) works ONLY on Locator objects, not on expect results
 
 When done, call done() with enrichedSpec, pomContent, and affectedPaths.`;
 
