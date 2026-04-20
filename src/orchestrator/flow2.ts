@@ -3,7 +3,7 @@ import { log } from '../utils/logger';
 import { runEnrichmentAgent } from '../agents/enrichmentAgent';
 import { runReworkAgent } from '../agents/reworkAgent';
 import { getIssue, commentOnIssue, transitionToInQA } from '../services/issues';
-import { getRouteMap } from '../services/testRepo';
+import { getRouteMap, getKeywordMap } from '../services/testRepo';
 import { captureSnapshots } from '../services/crawler';
 import { detectFeature } from '../utils/featureDetector';
 import { resolveUrls } from '../utils/routeResolver';
@@ -17,6 +17,7 @@ import {
   ownerName,
   mainRepo,
 } from '../services/github';
+import { toSpecFileName } from '../utils/naming';
 
 const QA_BASE_URL = () => process.env.QA_BASE_URL ?? 'http://localhost:3000';
 
@@ -24,7 +25,8 @@ export async function flow2(context: TriggerContext): Promise<void> {
   log('INFO', `[Flow 2] Starting for issue #${context.ticketId}`);
 
   const issue = context.issue ?? await getIssue(Number(context.ticketId));
-  const feature = detectFeature(issue.body, issue.labels);
+  const keywordMap = await getKeywordMap().catch(() => ({} as Record<string, string[]>));
+  const feature = detectFeature(issue.body, issue.labels, issue.title, keywordMap);
 
   // Find QA branch created by flow1
   const branches = await findBranchesByPattern(testRepoName(), `qa/${context.ticketId}-`);
@@ -61,21 +63,25 @@ export async function flow2(context: TriggerContext): Promise<void> {
   let pomContent: string;
   let affectedPaths = `tests/web/${feature}/`;
 
+  let tokenUsage: import('../services/ai').TokenUsage;
+
   if (context.isRework && context.parentTicketId) {
     log('INFO', `[Flow 2] Rework mode — parentTicketId: ${context.parentTicketId}`);
     const parentIssue = await getIssue(Number(context.parentTicketId));
     const result = await runReworkAgent(issue, parentIssue, feature, branch, snapshots);
     specContent = result.patchedSpec;
     pomContent = result.pomContent;
+    tokenUsage = result.tokenUsage;
   } else {
     const result = await runEnrichmentAgent(issue, feature, branch, snapshots, prDiff);
     specContent = result.enrichedSpec;
     pomContent = result.pomContent;
     affectedPaths = result.affectedPaths;
+    tokenUsage = result.tokenUsage;
   }
 
   // Commit enriched spec + POM
-  const specPath = `tests/web/${feature}/${context.ticketId}.spec.ts`;
+  const specPath = `tests/web/${feature}/${toSpecFileName(context.ticketId, issue.title)}`;
   const pomPath = `pages/${feature}/${capitalize(feature)}Page.ts`;
 
   await commitFile(
@@ -103,7 +109,8 @@ export async function flow2(context: TriggerContext): Promise<void> {
     `🤖 **KlikAgent** — Enriched spec ready for QA!\n\n` +
     `PR: ${prUrl}\n` +
     `Crawled ${snapshots.length} page(s) from QA environment.\n\n` +
-    `Issue moved to \`status:in-qa\`. Tests will run automatically on the PR.`,
+    `Issue moved to \`status:in-qa\`. Tests will run automatically on the PR.\n\n` +
+    `> Tokens: ${tokenUsage.promptTokens.toLocaleString()} prompt + ${tokenUsage.completionTokens.toLocaleString()} completion = **${tokenUsage.totalTokens.toLocaleString()} total**`,
   );
 
   log('INFO', `[Flow 2] Done — PR opened: ${prUrl}`);

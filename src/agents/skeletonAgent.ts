@@ -1,5 +1,5 @@
 import { GitHubIssue } from '../types';
-import { runAgent } from '../services/ai';
+import { runAgent, TokenUsage } from '../services/ai';
 import { skeletonTools, skeletonHandlers } from './tools';
 
 const SYSTEM_PROMPT = `You are a senior QA engineer writing Playwright TypeScript test skeletons for a web application.
@@ -53,12 +53,12 @@ export async function runSkeletonAgent(
   branch: string,
   isRework = false,
   parentTicketId?: string
-): Promise<string> {
-  const result = await runAgent(
+): Promise<{ skeletonSpec: string; tokenUsage: TokenUsage }> {
+  const { args, tokenUsage } = await runAgent(
     SYSTEM_PROMPT,
     buildUserMessage(issue, feature, branch, isRework, parentTicketId),
     skeletonTools,
     skeletonHandlers
   );
-  return result.skeletonSpec as string;
+  return { skeletonSpec: args.skeletonSpec as string, tokenUsage };
 }
