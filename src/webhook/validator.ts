@@ -3,7 +3,16 @@ import * as crypto from 'crypto';
 import { log } from '../utils/logger';
 
 export function validatePayload(req: Request, source: 'jira' | 'github'): boolean {
-  const rawBody: Buffer = req.body as Buffer;
+  const rawBody: Buffer | string | object = req.body as Buffer | string | object;
+
+  // Defensive: normalise to a string the HMAC can consume.
+  // express.raw() should give Buffer, but middleware ordering or proxy
+  // setups can sometimes leave body as a parsed object or plain string.
+  function bodyToBuffer(data: Buffer | string | object): Buffer {
+    if (Buffer.isBuffer(data)) return data;
+    if (typeof data === 'string') return Buffer.from(data, 'utf8');
+    return Buffer.from(JSON.stringify(data), 'utf8');
+  }
 
   if (source === 'jira') {
     const secret = process.env.JIRA_WEBHOOK_SECRET;
@@ -20,7 +29,7 @@ export function validatePayload(req: Request, source: 'jira' | 'github'): boolea
     }
 
     const hmac = crypto.createHmac('sha256', secret);
-    hmac.update(rawBody);
+    hmac.update(bodyToBuffer(rawBody));
     const computed = hmac.digest('hex');
 
     // Header may be prefixed with "sha256="
@@ -53,7 +62,7 @@ export function validatePayload(req: Request, source: 'jira' | 'github'): boolea
     }
 
     const hmac = crypto.createHmac('sha256', secret);
-    hmac.update(rawBody);
+    hmac.update(bodyToBuffer(rawBody));
     const computed = `sha256=${hmac.digest('hex')}`;
 
     // Strip sha256= prefix from provided header before comparing
