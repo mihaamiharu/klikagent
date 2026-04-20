@@ -19,7 +19,7 @@ Patch rules:
 - Use relative imports — never @pages, @helpers, @data aliases
 - Call validate_typescript before done()
 
-When done, call done() with patchedSpec (the full file with additions) and pomContent.`;
+When done, call done() with patchedSpec (the full file with additions), pomContent, and pomPath (repo-relative path matching the exported class name e.g. "pages/doctors/DoctorProfilePage.ts").`;
 
 function buildUserMessage(
   subtask: GitHubIssue,
@@ -51,7 +51,7 @@ ${serializeSnapshots(snapshots)}
 5. Add new tests to the spec — do NOT remove or rewrite existing ones
 6. Update the POM only if new locators are required
 7. Call validate_typescript to confirm the patched spec compiles
-8. Call done() with patchedSpec and pomContent
+8. Call done() with patchedSpec, pomContent, and pomPath matching the exported class name (e.g. "pages/${feature}/DoctorProfilePage.ts")
 `.trim();
 }
 
@@ -61,7 +61,7 @@ export async function runReworkAgent(
   feature: string,
   branch: string,
   snapshots: PageSnapshot[]
-): Promise<{ patchedSpec: string; pomContent: string; tokenUsage: TokenUsage }> {
+): Promise<{ patchedSpec: string; pomContent: string; pomPath: string; tokenUsage: TokenUsage }> {
   const { args, tokenUsage } = await runAgent(
     SYSTEM_PROMPT,
     buildUserMessage(subtask, parentTicket, feature, branch, snapshots),
@@ -71,6 +71,7 @@ export async function runReworkAgent(
   return {
     patchedSpec: args.patchedSpec as string,
     pomContent: args.pomContent as string,
+    pomPath: args.pomPath as string,
     tokenUsage,
   };
 }

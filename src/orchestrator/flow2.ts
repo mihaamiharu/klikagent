@@ -18,6 +18,7 @@ import {
   mainRepo,
 } from '../services/github';
 import { toSpecFileName } from '../utils/naming';
+import { pomPathFromContent } from '../agents/tools/outputTools';
 
 const QA_BASE_URL = () => process.env.QA_BASE_URL ?? 'http://localhost:3000';
 
@@ -65,24 +66,34 @@ export async function flow2(context: TriggerContext): Promise<void> {
 
   let tokenUsage: import('../services/ai').TokenUsage;
 
+  let pomPath: string;
+
   if (context.isRework && context.parentTicketId) {
     log('INFO', `[Flow 2] Rework mode — parentTicketId: ${context.parentTicketId}`);
     const parentIssue = await getIssue(Number(context.parentTicketId));
     const result = await runReworkAgent(issue, parentIssue, feature, branch, snapshots);
     specContent = result.patchedSpec;
     pomContent = result.pomContent;
+    pomPath = result.pomPath;
     tokenUsage = result.tokenUsage;
   } else {
     const result = await runEnrichmentAgent(issue, feature, branch, snapshots, prDiff);
     specContent = result.enrichedSpec;
     pomContent = result.pomContent;
+    pomPath = result.pomPath;
     affectedPaths = result.affectedPaths;
     tokenUsage = result.tokenUsage;
   }
 
+  // Sanity-check: ensure pomPath matches the exported class name in the content
+  const derivedPath = pomPathFromContent(pomContent, feature);
+  if (pomPath !== derivedPath) {
+    log('WARN', `[Flow 2] pomPath mismatch — agent said "${pomPath}", class name implies "${derivedPath}". Using derived path.`);
+    pomPath = derivedPath;
+  }
+
   // Commit enriched spec + POM
   const specPath = `tests/web/${feature}/${toSpecFileName(context.ticketId, issue.title)}`;
-  const pomPath = `pages/${feature}/${capitalize(feature)}Page.ts`;
 
   await commitFile(
     testRepoName(), branch, specPath, specContent,
@@ -116,6 +127,3 @@ export async function flow2(context: TriggerContext): Promise<void> {
   log('INFO', `[Flow 2] Done — PR opened: ${prUrl}`);
 }
 
-function capitalize(s: string): string {
-  return s.charAt(0).toUpperCase() + s.slice(1);
-}
