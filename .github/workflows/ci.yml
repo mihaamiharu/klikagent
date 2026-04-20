@@ -39,6 +39,7 @@ jobs:
           host: 103.235.75.99
           username: deploy
           key: ${{ secrets.DEPLOY_SSH_KEY }}
+          envs: AI_API_KEY,AI_BASE_URL,AI_MODEL,GITHUB_TOKEN,GITHUB_WEBHOOK_SECRET,GITHUB_OWNER,GITHUB_MAIN_REPO,GITHUB_TEST_REPO,PORT,QA_BASE_URL,QA_USER_EMAIL,QA_USER_PASSWORD
           script: |
             set -e
             DEPLOY_DIR=~/apps/klikagent
@@ -47,5 +48,19 @@ jobs:
             fi
             cd "$DEPLOY_DIR"
             git pull origin main
+            cat > .env <<EOF
+            AI_API_KEY=$AI_API_KEY
+            AI_BASE_URL=$AI_BASE_URL
+            AI_MODEL=$AI_MODEL
+            GITHUB_TOKEN=$GITHUB_TOKEN
+            GITHUB_WEBHOOK_SECRET=$GITHUB_WEBHOOK_SECRET
+            GITHUB_OWNER=$GITHUB_OWNER
+            GITHUB_MAIN_REPO=$GITHUB_MAIN_REPO
+            GITHUB_TEST_REPO=$GITHUB_TEST_REPO
+            PORT=$PORT
+            QA_BASE_URL=$QA_BASE_URL
+            QA_USER_EMAIL=$QA_USER_EMAIL
+            QA_USER_PASSWORD=$QA_USER_PASSWORD
+            EOF
             docker compose up --build -d
             docker image prune -f
