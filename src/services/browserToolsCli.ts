@@ -148,6 +148,9 @@ function shapeError(stderr: string, cmd: string): string {
   if (cmd.includes('state-load') && msg.includes('no such file')) {
     return JSON.stringify({ error: 'STATE_FILE_NOT_FOUND', message: stderr });
   }
+  if (cmd.includes('goto')) {
+    return JSON.stringify({ error: 'NAVIGATION_ERROR', message: stderr });
+  }
   return JSON.stringify({ error: 'UNKNOWN', message: stderr });
 }
 
@@ -215,7 +218,7 @@ async function handleNavigate(args: Record<string, unknown>): Promise<string> {
   }
 
   const snapshotResult = await cli('snapshot');
-  if (result.code !== 0) {
+  if (snapshotResult.code !== 0) {
     return JSON.stringify({ error: 'SNAPSHOT_FAILED', message: snapshotResult.stderr });
   }
 
