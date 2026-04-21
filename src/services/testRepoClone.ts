@@ -15,7 +15,7 @@ function localClonePath(): string {
 function githubToken(): string {
   const t = process.env.GITHUB_TOKEN;
   if (!t) throw new Error('GITHUB_TOKEN env var is not set');
-  return t;
+  return t.trim();
 }
 
 const GH_API = 'https://api.github.com';
