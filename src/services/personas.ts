@@ -72,7 +72,7 @@ export async function getPersonas(roles: string[]): Promise<PersonaMap> {
     try {
       result[role] = resolveEnvPlaceholders(rawConfig[role]);
     } catch (err) {
-      if (role === 'default' && defaultEmail && defaultPassword) {
+      if (defaultEmail && defaultPassword) {
         result[role] = { email: defaultEmail, password: defaultPassword };
       } else {
         throw err;
