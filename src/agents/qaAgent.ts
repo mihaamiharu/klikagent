@@ -21,10 +21,17 @@ On locator failure: tool returns error JSON with a hint. Call browser_snapshot()
 
 ## Browser exploration workflow
 - Call browser_navigate(url, persona) for each starting URL x persona combination
-- After navigation, interact with the page: use browser_click and browser_fill to reach states relevant to the acceptance criteria
-- Call browser_snapshot() after each meaningful interaction to capture updated locators
+- After navigation, call browser_list_interactables() to see all clickable/fillable elements with their refs, roles, labels, and generated CSS selectors
+- Use the selector from browser_list_interactables output (never guess selectors like "input[name='email']")
+- Interact with the page: use browser_click and browser_fill with selectors from the interactables list
+- Call browser_list_interactables() again after each meaningful interaction to observe updated elements
 - Repeat until you have observed all states required by the acceptance criteria
 - Call browser_close() when exploration is complete
+
+## Selector priority for interactions
+1. Use the CSS selector provided by browser_list_interactables (e.g. "input[name=\"email\"]")
+2. Use the element ref from browser_list_interactables (e.g. "e5")
+3. If a selector fails, call browser_list_interactables() again to see current state
 
 ## Spec writing rules
 - Use ONLY locators from the page snapshots - never invent selectors
