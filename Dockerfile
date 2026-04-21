@@ -15,8 +15,6 @@ WORKDIR /app
 
 ENV NODE_ENV=production
 
-RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*
-
 COPY package*.json ./
 RUN npm ci --omit=dev && npm cache clean --force && \
     npx playwright install chromium --with-deps
