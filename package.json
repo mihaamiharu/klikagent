@@ -18,6 +18,7 @@
     ]
   },
   "dependencies": {
+    "@playwright/mcp": "^0.0.70",
     "dotenv": "^16.3.1",
     "express": "^4.18.2",
     "openai": "^6.34.0",
