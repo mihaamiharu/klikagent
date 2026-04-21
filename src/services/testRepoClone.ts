@@ -9,13 +9,13 @@ import { log } from '../utils/logger';
 function localClonePath(): string {
   const p = process.env.KLIKAGENT_TESTS_LOCAL_PATH;
   if (!p) throw new Error('KLIKAGENT_TESTS_LOCAL_PATH env var is not set');
-  return p;
+  return p.trim();
 }
 
 function githubToken(): string {
   const t = process.env.GITHUB_TOKEN;
   if (!t) throw new Error('GITHUB_TOKEN env var is not set');
-  return t;
+  return t.trim();
 }
 
 const GH_API = 'https://api.github.com';
