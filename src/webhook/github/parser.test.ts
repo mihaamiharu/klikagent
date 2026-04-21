@@ -1,12 +1,5 @@
 import { parseGitHubPayload } from './parser';
-import { GitHubPRReviewPayload, GitHubWorkflowRunPayload, ReviewContext, TriggerContext } from '../../types';
-import * as githubApi from '../../utils/githubApi';
-
-// Mock the HTTP call so tests don't need real credentials
-jest.mock('../../utils/githubApi');
-const mockFetchWorkflowRunInputs = githubApi.fetchWorkflowRunInputs as jest.MockedFunction<
-  typeof githubApi.fetchWorkflowRunInputs
->;
+import { GitHubIssueWebhookPayload, GitHubPRReviewPayload, ReviewContext, TriggerContext } from '../../types';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -22,7 +15,7 @@ function makePRReviewPayload(overrides: Partial<GitHubPRReviewPayload> = {}): Gi
     pull_request: {
       number: 14,
       draft: false,
-      head: { ref: 'qa/KA-42-login-form-validation' },
+      head: { ref: 'qa/42-login-form-validation' },
     },
     repository: {
       name: 'klikagent-tests',
@@ -32,21 +25,21 @@ function makePRReviewPayload(overrides: Partial<GitHubPRReviewPayload> = {}): Gi
   };
 }
 
-function makeWorkflowRunPayload(overrides: Partial<GitHubWorkflowRunPayload> = {}): GitHubWorkflowRunPayload {
+function makeIssueLabeledPayload(labelName: string): GitHubIssueWebhookPayload {
   return {
-    action: 'completed',
-    workflow_run: {
-      id: 9876543,
-      name: 'smoke.yml',
-      conclusion: 'success',
-      workflow_id: 111,
-      html_url: 'https://github.com/yourorg/klikagent-tests/actions/runs/9876543',
+    action: 'labeled',
+    label: { name: labelName },
+    issue: {
+      number: 42,
+      title: 'Login form validation',
+      body: 'As a user I want to validate login...',
+      html_url: 'https://github.com/org/repo/issues/42',
+      labels: [{ name: labelName }, { name: 'scope:web' }],
     },
     repository: {
-      name: 'klikagent-tests',
-      full_name: 'yourorg/klikagent-tests',
+      name: 'repo',
+      full_name: 'org/repo',
     },
-    ...overrides,
   };
 }
 
@@ -73,7 +66,7 @@ describe('parseGitHubPayload — pull_request_review', () => {
     expect(result).toBeNull();
   });
 
-  it('returns null when branch does not match qa/KA-* pattern', async () => {
+  it('returns null when branch does not match qa/{number}-* pattern', async () => {
     const payload = makePRReviewPayload();
     payload.pull_request.head.ref = 'feature/login-form';
     const result = await parseGitHubPayload('pull_request_review', payload);
@@ -83,7 +76,7 @@ describe('parseGitHubPayload — pull_request_review', () => {
   it('extracts ticketId from branch name', async () => {
     const result = await parseGitHubPayload('pull_request_review', makePRReviewPayload()) as ReviewContext;
     expect(result).not.toBeNull();
-    expect(result.ticketId).toBe('KA-42');
+    expect(result.ticketId).toBe('42');
   });
 
   it('returns ReviewContext with correct fields for valid payload', async () => {
@@ -91,8 +84,8 @@ describe('parseGitHubPayload — pull_request_review', () => {
     expect(result).toMatchObject({
       prNumber: 14,
       repo: 'klikagent-tests',
-      branch: 'qa/KA-42-login-form-validation',
-      ticketId: 'KA-42',
+      branch: 'qa/42-login-form-validation',
+      ticketId: '42',
       reviewId: 999,
       reviewerLogin: 'reviewer-jane',
     });
@@ -117,64 +110,39 @@ describe('parseGitHubPayload — pull_request_review', () => {
   });
 });
 
-// ─── workflow_run ─────────────────────────────────────────────────────────────
+// ─── issues ───────────────────────────────────────────────────────────────────
 
-describe('parseGitHubPayload — workflow_run', () => {
-  beforeEach(() => {
-    mockFetchWorkflowRunInputs.mockResolvedValue({
-      ticketId: 'KA-42',
-      runType: 'smoke',
-    });
-  });
-
-  afterEach(() => {
-    jest.resetAllMocks();
-  });
-
-  it('returns null when action is not "completed"', async () => {
-    const payload = makeWorkflowRunPayload({ action: 'requested' });
-    const result = await parseGitHubPayload('workflow_run', payload);
+describe('parseGitHubPayload — issues', () => {
+  it('returns null for status:in-progress (no-op — Flow 1 removed)', async () => {
+    const payload = makeIssueLabeledPayload('status:in-progress');
+    const result = await parseGitHubPayload('issues', payload);
     expect(result).toBeNull();
   });
 
-  it('returns null when workflow name is not selective.yml or smoke.yml', async () => {
-    const payload = makeWorkflowRunPayload();
-    payload.workflow_run.name = 'ci.yml';
-    const result = await parseGitHubPayload('workflow_run', payload);
+  it('returns TriggerContext with flow 2 for status:ready-for-qa', async () => {
+    const payload = makeIssueLabeledPayload('status:ready-for-qa');
+    const result = await parseGitHubPayload('issues', payload) as TriggerContext;
+    expect(result).not.toBeNull();
+    expect(result.flow).toBe(2);
+    expect(result.ticketId).toBe('42');
+    expect(result.status).toBe('status:ready-for-qa');
+  });
+
+  it('returns null for unrelated label', async () => {
+    const payload = makeIssueLabeledPayload('priority:high');
+    const result = await parseGitHubPayload('issues', payload);
     expect(result).toBeNull();
   });
 
-  it('accepts selective.yml as a valid workflow name', async () => {
-    const payload = makeWorkflowRunPayload();
-    payload.workflow_run.name = 'selective.yml';
-    const result = await parseGitHubPayload('workflow_run', payload);
-    expect(result).not.toBeNull();
+  it('returns null when action is not "labeled"', async () => {
+    const payload = makeIssueLabeledPayload('status:ready-for-qa');
+    payload.action = 'closed';
+    const result = await parseGitHubPayload('issues', payload);
+    expect(result).toBeNull();
   });
 
-  it('accepts smoke.yml as a valid workflow name', async () => {
-    const result = await parseGitHubPayload('workflow_run', makeWorkflowRunPayload());
-    expect(result).not.toBeNull();
-  });
-
-  it('calls fetchWorkflowRunInputs with the run ID', async () => {
-    await parseGitHubPayload('workflow_run', makeWorkflowRunPayload());
-    expect(mockFetchWorkflowRunInputs).toHaveBeenCalledWith(9876543);
-  });
-
-  it('returns TriggerContext with flow 3 and correct fields', async () => {
-    const result = await parseGitHubPayload('workflow_run', makeWorkflowRunPayload()) as TriggerContext;
-    expect(result).toMatchObject({
-      flow: 3,
-      ticketId: 'KA-42',
-      runId: 9876543,
-      runType: 'smoke',
-    });
-  });
-
-  it('returns null (and does not throw) when fetchWorkflowRunInputs rejects', async () => {
-    mockFetchWorkflowRunInputs.mockRejectedValue(new Error('GitHub API error'));
-    // The server catches this at the handler level; parser should let it propagate
-    // so the caller (server) logs and skips gracefully
-    await expect(parseGitHubPayload('workflow_run', makeWorkflowRunPayload())).rejects.toThrow('GitHub API error');
+  it('returns null for workflow_run (Flow 3 removed)', async () => {
+    const result = await parseGitHubPayload('workflow_run', {});
+    expect(result).toBeNull();
   });
 });
