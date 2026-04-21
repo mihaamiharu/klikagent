@@ -15,6 +15,7 @@ import {
   mainRepo,
 } from '../services/github';
 import { toSpecFileName } from '../utils/naming';
+import { pomPathFromContent } from '../agents/tools/outputTools';
 
 export async function flow2(context: TriggerContext): Promise<void> {
   log('INFO', `[Flow 2] Starting for issue #${context.ticketId}`);
@@ -39,13 +40,20 @@ export async function flow2(context: TriggerContext): Promise<void> {
     log('INFO', `[Flow 2] PR diff fetched (${prDiff.length} chars)`);
   }
 
-  // Run enrichment agent (no crawling — snapshots passed as empty array)
+  // Run enrichment agent (no crawling — snapshots passed as empty array until playwright/mcp lands)
   const result = await runEnrichmentAgent(issue, feature, branch, [], prDiff);
   const specContent = result.enrichedSpec;
   const pomContent = result.pomContent;
   const affectedPaths = result.affectedPaths;
   const tokenUsage = result.tokenUsage;
-  const pomPath = `pages/${feature}/${feature.charAt(0).toUpperCase() + feature.slice(1)}Page.ts`;
+  let pomPath = `pages/${feature}/${feature.charAt(0).toUpperCase() + feature.slice(1)}Page.ts`;
+
+  // Sanity-check: ensure pomPath matches the exported class name in the content
+  const derivedPath = pomPathFromContent(pomContent, feature);
+  if (pomPath !== derivedPath) {
+    log('WARN', `[Flow 2] pomPath mismatch — agent said "${pomPath}", class name implies "${derivedPath}". Using derived path.`);
+    pomPath = derivedPath;
+  }
 
   // Commit enriched spec + POM
   const specPath = `tests/web/${feature}/${toSpecFileName(context.ticketId, issue.title)}`;

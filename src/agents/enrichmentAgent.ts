@@ -17,8 +17,15 @@ Rules:
 - Spec imports from the POM using relative paths
 - Use relative imports — never @pages, @helpers, @data aliases
 - CRITICAL: Call list_available_poms before writing any imports. Only import POM classes that appear in that list OR that you are creating as pomContent. NEVER import a POM that does not exist in the list — this will break CI.
-- Call validate_typescript before done() to confirm the code is valid
+- Call validate_typescript before done() to confirm the code is valid. If it returns errors, fix them before calling done().
 - The affectedPaths field should list test folders impacted by the PR diff provided
+- The pomPath field must be the repo-relative path matching the exported class name exactly e.g. "pages/doctors/DoctorProfilePage.ts" — never "pages/doctors/DoctorsPage.ts" if the class is DoctorProfilePage
+- Do NOT call the same tool twice with the same arguments — cache results from the first call
+
+Playwright API rules (violations will be caught by validate_typescript):
+- NEVER use expect(...).or() — this method does not exist on expect. For OR assertions use locator.or(): \`locator1.or(locator2)\`, or use a regex: \`expect(el).toContainText(/value1|value2/)\`
+- NEVER chain .or() after expect(...).toContainText(...) or any other expect assertion
+- locator.or(other) works ONLY on Locator objects, not on expect results
 
 When done, call done() with enrichedSpec, pomContent, and affectedPaths.`;
 
@@ -53,7 +60,7 @@ ${prDiff || '(no diff available)'}
 6. Write or update the POM at pages/${feature}/${feature.charAt(0).toUpperCase() + feature.slice(1)}Page.ts
 7. Determine affectedPaths from the PR diff
 8. Call validate_typescript with your spec to confirm it compiles
-9. Call done() with enrichedSpec, pomContent, and affectedPaths
+9. Call done() with enrichedSpec, pomContent, pomPath (matching the exported class name), and affectedPaths
 `.trim();
 }
 
@@ -63,7 +70,7 @@ export async function runEnrichmentAgent(
   branch: string,
   snapshots: PageSnapshot[],
   prDiff: string
-): Promise<{ enrichedSpec: string; pomContent: string; affectedPaths: string; tokenUsage: TokenUsage }> {
+): Promise<{ enrichedSpec: string; pomContent: string; pomPath: string; affectedPaths: string; tokenUsage: TokenUsage }> {
   const { args, tokenUsage } = await runAgent(
     SYSTEM_PROMPT,
     buildUserMessage(issue, feature, branch, snapshots, prDiff),
@@ -73,6 +80,7 @@ export async function runEnrichmentAgent(
   return {
     enrichedSpec: args.enrichedSpec as string,
     pomContent: args.pomContent as string,
+    pomPath: args.pomPath as string,
     affectedPaths: args.affectedPaths as string,
     tokenUsage,
   };
