@@ -57,12 +57,27 @@ export async function getPersonas(roles: string[]): Promise<PersonaMap> {
 
   const result: PersonaMap = {};
 
+  const defaultEmail = process.env.QA_USER_EMAIL;
+  const defaultPassword = process.env.QA_USER_PASSWORD;
+
   for (const role of resolvedRoles) {
     if (!(role in rawConfig)) {
-      log('WARN', `[personas] Role "${role}" not found in config/personas.json`);
+      if (role === 'default' && defaultEmail && defaultPassword) {
+        result[role] = { email: defaultEmail, password: defaultPassword };
+      } else {
+        log('WARN', `[personas] Role "${role}" not found in config/personas.json`);
+      }
       continue;
     }
-    result[role] = resolveEnvPlaceholders(rawConfig[role]);
+    try {
+      result[role] = resolveEnvPlaceholders(rawConfig[role]);
+    } catch (err) {
+      if (role === 'default' && defaultEmail && defaultPassword) {
+        result[role] = { email: defaultEmail, password: defaultPassword };
+      } else {
+        throw err;
+      }
+    }
   }
 
   return result;
