@@ -23,9 +23,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 const SESSION_NAME = 'klikagent';
-const STATE_DIR = process.env.KLIKAGENT_TESTS_LOCAL_PATH
-  ? path.join(process.env.KLIKAGENT_TESTS_LOCAL_PATH, '.playwright-sessions')
-  : '/tmp/klikagent-sessions';
+const STATE_DIR = path.join(__dirname, '..', '.playwright-sessions');
 
 // ─── Shell helper ──────────────────────────────────────────────────────────────
 
@@ -103,9 +101,9 @@ async function authenticatePersona(personaName: string): Promise<void> {
   const loginUrl = `${baseUrl}/login`;
 
   await cli('goto', loginUrl);
-  await cli('type', persona.email);
-  await cli('type', persona.password);
-  await cli('press', 'Enter');
+  await cli('fill', 'input[name="email"]', persona.email);
+  await cli('fill', 'input[name="password"]', persona.password);
+  await cli('click', 'button[type="submit"]');
   await cli('wait-for-load', 'networkidle');
   await cli('state-save', stateFile);
   log('INFO', `[BrowserTools] Authenticated as "${personaName}" and saved state to ${stateFile}`);
