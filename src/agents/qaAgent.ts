@@ -40,11 +40,19 @@ On locator failure: tool returns error JSON with a hint. Call browser_snapshot()
 - POM file goes in: pages/{feature}/{ClassName}.ts
 - Exported class name must match the pomPath filename exactly
 - Use relative imports only
+- If the feature requires multiple POMs (e.g. one for a page and one for a sub-component), put all of them in the poms array in done()
 
 ## Playwright API rules (violations will be caught by validate_typescript)
 - NEVER use expect(...).or() - this method does not exist on expect. Use locator.or(): locator1.or(locator2), or use a regex: expect(el).toContainText(/value1|value2/)
 - NEVER chain .or() after expect(...).toContainText(...) or any other expect assertion
 - locator.or(other) works ONLY on Locator objects, not on expect results
+
+## CRITICAL: validate_typescript and done() protocol
+- Call validate_typescript ONCE after writing your spec and POM(s)
+- If validation returns errors: fix them, then call validate_typescript again
+- If validation returns {"valid":true,"errors":[]}: call done() IMMEDIATELY on the next tool call — do NOT write more code or re-validate again
+- After validation passes, the ONLY acceptable next tool call is done()
+- In done(), pass all POMs in the poms array — each POM must include both pomContent and pomPath
 
 ## Required tool call sequence
 1. Call get_context_docs and get_fixtures for project conventions
@@ -53,9 +61,9 @@ On locator failure: tool returns error JSON with a hint. Call browser_snapshot()
 4. Call get_existing_tests to see any existing specs for this feature
 5. Use browser_navigate, browser_click, browser_fill, browser_snapshot to explore the app
 6. Call browser_close() when exploration is complete
-7. Write enrichedSpec and pomContent using only observed locators
-8. Call validate_typescript with your spec - fix any errors returned
-9. Call done() with enrichedSpec, pomContent, pomPath, and affectedPaths`;
+7. Write enrichedSpec and poms (array of {pomContent, pomPath}) using only observed locators
+8. Call validate_typescript with your spec — fix any errors if returned
+9. If valid: call done() immediately. If errors: fix and repeat from step 8`;
 
 function buildUserMessage(
   issue: GitHubIssue,
@@ -94,9 +102,9 @@ ${prDiff || '(no diff available)'}
 7. Call browser_snapshot() after each interaction to capture real locators
 8. Call browser_close() when exploration is complete
 9. Write the full Playwright spec using ONLY locators from your snapshots
-10. Write or update the POM at pages/${feature}/${featureCap}Page.ts (adjust class name if needed)
-11. Call validate_typescript with your spec - fix any errors before proceeding
-12. Call done() with enrichedSpec, pomContent, pomPath (matching exported class name), and affectedPaths
+10. Write or update POM(s) at pages/${feature}/ — each POM needs a matching pomPath. Put all POMs in the poms array.
+11. Call validate_typescript with your spec — if errors are returned, fix them and re-validate. If valid, proceed to step 12.
+12. Call done() with enrichedSpec, poms (array of {pomContent, pomPath}), and affectedPaths. If validation was valid, done() must be called immediately — do NOT write more code or re-validate.
 `.trim();
 }
 
@@ -107,7 +115,7 @@ export async function runQaAgent(
   personas: string[],
   startingUrls: string[],
   prDiff: string
-): Promise<{ enrichedSpec: string; pomContent: string; pomPath: string; affectedPaths: string; tokenUsage: TokenUsage }> {
+): Promise<{ enrichedSpec: string; poms: Array<{ pomContent: string; pomPath: string }>; affectedPaths: string; tokenUsage: TokenUsage }> {
   const { args, tokenUsage } = await runAgent(
     SYSTEM_PROMPT,
     buildUserMessage(issue, feature, branch, personas, startingUrls, prDiff),
@@ -116,8 +124,7 @@ export async function runQaAgent(
   );
   return {
     enrichedSpec: args.enrichedSpec as string,
-    pomContent: args.pomContent as string,
-    pomPath: args.pomPath as string,
+    poms: args.poms as Array<{ pomContent: string; pomPath: string }>,
     affectedPaths: args.affectedPaths as string,
     tokenUsage,
   };

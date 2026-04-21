@@ -70,8 +70,7 @@ function setupDefaultMocks(): void {
 
   (selfCorrection.runWithSelfCorrection as jest.Mock).mockResolvedValue({
     specContent: 'test("login", async () => {});',
-    pomContent: 'export class AuthPage {}',
-    pomPath: 'pages/auth/AuthPage.ts',
+    poms: [{ pomContent: 'export class AuthPage {}', pomPath: 'pages/auth/AuthPage.ts' }],
     affectedPaths: 'tests/web/auth/',
     tokenUsage: { promptTokens: 1000, completionTokens: 500, totalTokens: 1500 },
     warned: false,
@@ -177,8 +176,7 @@ describe('generateQaSpecFlow — warned path', () => {
     const warningMessage = 'All 3 self-correction attempts exhausted. Playwright test still failing.';
     (selfCorrection.runWithSelfCorrection as jest.Mock).mockResolvedValue({
       specContent: 'test("login", async () => {});',
-      pomContent: 'export class AuthPage {}',
-      pomPath: 'pages/auth/AuthPage.ts',
+      poms: [{ pomContent: 'export class AuthPage {}', pomPath: 'pages/auth/AuthPage.ts' }],
       affectedPaths: 'tests/web/auth/',
       tokenUsage: { promptTokens: 2000, completionTokens: 1000, totalTokens: 3000 },
       warned: true,
@@ -195,8 +193,7 @@ describe('generateQaSpecFlow — warned path', () => {
   it('still opens PR and transitions issue even when warned', async () => {
     (selfCorrection.runWithSelfCorrection as jest.Mock).mockResolvedValue({
       specContent: 'test("login", async () => {});',
-      pomContent: 'export class AuthPage {}',
-      pomPath: 'pages/auth/AuthPage.ts',
+      poms: [{ pomContent: 'export class AuthPage {}', pomPath: 'pages/auth/AuthPage.ts' }],
       affectedPaths: 'tests/web/auth/',
       tokenUsage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
       warned: true,
@@ -257,22 +254,24 @@ describe('generateQaSpecFlow — no URLs / env fallback', () => {
   });
 });
 
-describe('generateQaSpecFlow — pomPath sanity check', () => {
-  it('uses derived pomPath when agent pomPath mismatches class name', async () => {
+describe('generateQaSpecFlow — POM handling', () => {
+  it('commits all POMs from the poms array', async () => {
     (selfCorrection.runWithSelfCorrection as jest.Mock).mockResolvedValue({
       specContent: 'test("login", async () => {});',
-      pomContent: 'export class LoginPage {}',
-      pomPath: 'pages/auth/WrongPage.ts',    // agent returned wrong path
+      poms: [
+        { pomContent: 'export class AuthPage {}', pomPath: 'pages/auth/AuthPage.ts' },
+        { pomContent: 'export class LoginForm {}', pomPath: 'pages/auth/LoginForm.ts' },
+      ],
       affectedPaths: 'tests/web/auth/',
       tokenUsage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
       warned: false,
     });
-    (outputTools.pomPathFromContent as jest.Mock).mockReturnValue('pages/auth/LoginPage.ts');
 
     await generateQaSpecFlow(makeContext());
 
-    // The second commitFile call should use the derived path
-    const pomCommitCall = (github.commitFile as jest.Mock).mock.calls[1];
-    expect(pomCommitCall[2]).toBe('pages/auth/LoginPage.ts');
+    // Should have 3 commitFile calls: spec, pom1, pom2
+    expect((github.commitFile as jest.Mock).mock.calls.length).toBe(3);
+    expect((github.commitFile as jest.Mock).mock.calls[1][2]).toBe('pages/auth/AuthPage.ts');
+    expect((github.commitFile as jest.Mock).mock.calls[2][2]).toBe('pages/auth/LoginForm.ts');
   });
 });

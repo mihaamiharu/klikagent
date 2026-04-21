@@ -18,7 +18,6 @@ import {
   mainRepo,
 } from '../services/github';
 import { toSpecFileName, toBranchSlug } from '../utils/naming';
-import { pomPathFromContent } from '../agents/tools/outputTools';
 
 export async function generateQaSpecFlow(context: TriggerContext): Promise<void> {
   log('INFO', `[generateQaSpecFlow] Starting for issue #${context.ticketId}`);
@@ -72,27 +71,21 @@ export async function generateQaSpecFlow(context: TriggerContext): Promise<void>
   );
 
   let specContent = result.specContent;
-  let pomContent = result.pomContent;
-  let pomPath = result.pomPath;
+  const poms = result.poms;
   const affectedPaths = result.affectedPaths;
   const tokenUsage = result.tokenUsage;
 
-  // Step 9: Sanity-check pomPath via pomPathFromContent
-  const derivedPath = pomPathFromContent(pomContent, feature);
-  if (pomPath !== derivedPath) {
-    log('WARN', `[generateQaSpecFlow] pomPath mismatch — agent said "${pomPath}", class name implies "${derivedPath}". Using derived path.`);
-    pomPath = derivedPath;
-  }
-
-  // Step 10: Commit spec + POM to branch
+  // Step 9: Commit spec + POMs to branch
   await commitFile(
     testRepoName(), branch, specPath, specContent,
     `feat(spec): add #${context.ticketId} spec [klikagent]`,
   );
-  await commitFile(
-    testRepoName(), branch, pomPath, pomContent,
-    `feat(pom): add ${feature} POM for #${context.ticketId} [klikagent]`,
-  );
+  for (const { pomContent, pomPath } of poms) {
+    await commitFile(
+      testRepoName(), branch, pomPath, pomContent,
+      `feat(pom): add ${feature} POM for #${context.ticketId} [klikagent]`,
+    );
+  }
 
   // Step 11: Open PR in klikagent-tests
   const prUrl = await openPR(
