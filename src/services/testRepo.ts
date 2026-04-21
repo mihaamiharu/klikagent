@@ -145,20 +145,3 @@ export async function writeFile(branch: string, path: string, content: string, m
 
 // ─── Keyword map ──────────────────────────────────────────────────────────────
 
-/**
- * Fetches config/keywords.json from the test repo and parses it as a keyword map.
- * Falls back to using route map keys as keywords if the file is missing or invalid.
- */
-export async function getKeywordMap(): Promise<Record<string, string[]>> {
-  const content = await readFile('config/keywords.json');
-  if (content) {
-    try {
-      return JSON.parse(content) as Record<string, string[]>;
-    } catch {
-      log('WARN', '[testRepo] config/keywords.json is invalid JSON — falling back to route map keys');
-    }
-  }
-  // Fallback: derive from route map keys (each feature name becomes its own keyword)
-  const routeMap = await getRouteMap();
-  return Object.fromEntries(Object.keys(routeMap).map((k) => [k, [k]]));
-}
