@@ -1,6 +1,8 @@
 import { TriggerContext, ReviewContext } from '../../types';
 import { log } from '../../utils/logger';
-import { reviewAgent } from '../../agents/reviewAgent';
+import { orchestrate } from '../../orchestrator';
+import { runReviewAgent } from '../../agents/reviewAgent';
+import { getReviewComments } from '../../services/github';
 
 function isTriggerContext(result: TriggerContext | ReviewContext): result is TriggerContext {
   return 'flow' in result;
@@ -10,12 +12,13 @@ export async function routeGitHubEvent(result: TriggerContext | ReviewContext): 
   try {
     if (isTriggerContext(result)) {
       log('ROUTE', `GitHub TriggerContext → orchestrator (${result.ticketId}, status: ${result.status})`);
-      // GitHub Actions workflow_run events are no longer routed via TriggerContext —
-      // handled directly by the orchestrator via status label routing.
-      log('SKIP', `[githubRouter] TriggerContext received — no handler (workflow_run removed from types)`);
+      await orchestrate(result);
     } else {
       log('ROUTE', `GitHub ReviewContext → Review Agent (${result.ticketId}, PR #${result.prNumber})`);
-      await reviewAgent(result);
+      const inlineComments = await getReviewComments(result.prNumber, result.reviewId, result.repo).catch(() => []);
+      const enriched = { ...result, comments: inlineComments.length > 0 ? inlineComments : result.comments };
+      const feature = result.branch.match(/^qa\/\d+-([^-]+)/)?.[1] ?? 'general';
+      await runReviewAgent(enriched, feature);
     }
   } catch (err) {
     log('ERROR', `Error routing GitHub event: ${(err as Error).message}`);

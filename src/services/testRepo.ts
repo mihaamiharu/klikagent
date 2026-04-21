@@ -25,6 +25,23 @@ export async function getRouteMap(): Promise<Record<string, string>> {
   return Object.fromEntries(pairs.map(([, k, v]) => [k, v]));
 }
 
+// Reads klikagent-tests/config/keywords.json — a user-maintained map of feature → keywords.
+// Falls back to using route map keys as single-word keywords if the file doesn't exist.
+// Example keywords.json: { "auth": ["login", "sign in"], "doctors": ["doctor", "physician"] }
+export async function getKeywordMap(): Promise<Record<string, string[]>> {
+  const content = await readFile('config/keywords.json');
+  if (content) {
+    try {
+      return JSON.parse(content) as Record<string, string[]>;
+    } catch {
+      log('WARN', '[testRepo] config/keywords.json is invalid JSON — falling back to route map keys');
+    }
+  }
+  // Fallback: derive from route map keys (each feature name becomes its own keyword)
+  const routeMap = await getRouteMap();
+  return Object.fromEntries(Object.keys(routeMap).map((k) => [k, [k]]));
+}
+
 export async function getTsConfig(): Promise<string> {
   return await readFile('tsconfig.json') ?? '';
 }
@@ -54,6 +71,17 @@ async function findPOMFile(feature: string, ref = 'HEAD'): Promise<string | null
 
 export async function getExistingPOMNames(feature: string): Promise<string[]> {
   return listDir(`pages/${feature}`);
+}
+
+export async function listAllPOMs(): Promise<string[]> {
+  const features = await listDir('pages');
+  const results = await Promise.all(
+    features.map(async (f) => {
+      const files = await listDir(`pages/${f}`);
+      return files.filter((n) => n.endsWith('Page.ts')).map((n) => `pages/${f}/${n}`);
+    })
+  );
+  return results.flat();
 }
 
 export async function getExistingPOM(feature: string): Promise<string | null> {
@@ -91,17 +119,22 @@ export async function getExistingTests(feature: string): Promise<Record<string, 
 
 // ─── Branch-specific reads ────────────────────────────────────────────────────
 
-function specPath(feature: string, ticketId: string): string {
-  return `tests/web/${feature}/${ticketId}.spec.ts`;
+// Finds a spec file for a ticketId by scanning the directory — resilient to any naming convention.
+// Matches the first file starting with "${ticketId}" (e.g. "21.spec.ts" or "21-doctor-reviews.spec.ts").
+async function findSpecFile(feature: string, ticketId: string, ref: string): Promise<string | null> {
+  const files = await listDir(`tests/web/${feature}`, ref);
+  return files.find((f) => f.startsWith(ticketId) && f.endsWith('.spec.ts')) ?? null;
 }
 
 // Reads the current spec for a ticket on a branch (works for both skeleton and enriched)
 export async function getCurrentSpec(branch: string, ticketId: string, feature: string): Promise<string | null> {
-  return getFileOnBranch(testRepoName(), branch, specPath(feature, ticketId));
+  const file = await findSpecFile(feature, ticketId, branch);
+  return file ? getFileOnBranch(testRepoName(), branch, `tests/web/${feature}/${file}`) : null;
 }
 
 export async function getParentSpec(branch: string, parentTicketId: string, feature: string): Promise<string | null> {
-  return getFileOnBranch(testRepoName(), branch, specPath(feature, parentTicketId));
+  const file = await findSpecFile(feature, parentTicketId, branch);
+  return file ? getFileOnBranch(testRepoName(), branch, `tests/web/${feature}/${file}`) : null;
 }
 
 // ─── Write ────────────────────────────────────────────────────────────────────
