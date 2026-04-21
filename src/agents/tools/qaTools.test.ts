@@ -9,6 +9,7 @@ describe('qaTools', () => {
     expect(toolNames).toContain('browser_fill');
     expect(toolNames).toContain('browser_snapshot');
     expect(toolNames).toContain('browser_close');
+    expect(toolNames).toContain('browser_list_interactables');
   });
 
   it('includes repo context tools', () => {
@@ -39,6 +40,7 @@ describe('qaHandlers', () => {
     expect(qaHandlers).toHaveProperty('browser_fill');
     expect(qaHandlers).toHaveProperty('browser_snapshot');
     expect(qaHandlers).toHaveProperty('browser_close');
+    expect(qaHandlers).toHaveProperty('browser_list_interactables');
   });
 
   it('has validate_typescript handler', () => {
