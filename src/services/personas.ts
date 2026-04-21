@@ -47,8 +47,10 @@ function resolveEnvPlaceholders(raw: Record<string, string>): Persona {
   return resolved as unknown as Persona;
 }
 
-// Fetches personas.json from klikagent-tests repo and resolves ${VAR} placeholders.
-// If roles is empty, returns all personas from config.
+/**
+ * Fetches personas.json from klikagent-tests repo and resolves ${VAR} placeholders.
+ * If roles is empty, returns all personas from config.
+ */
 export async function getPersonas(roles: string[]): Promise<PersonaMap> {
   const rawConfig = await fetchRawConfig();
   const resolvedRoles = roles.length > 0 ? roles : Object.keys(rawConfig);
@@ -66,9 +68,11 @@ export async function getPersonas(roles: string[]): Promise<PersonaMap> {
   return result;
 }
 
-// Parses the ## Personas section from a GitHub issue body.
-// Returns array of role names e.g. ['patient', 'doctor'].
-// If the ## Personas section is missing, returns [] (caller should fall back to all personas).
+/**
+ * Parses the ## Personas section from a GitHub issue body.
+ * Returns array of role names e.g. ['patient', 'doctor'].
+ * If the ## Personas section is missing, returns [] (caller should fall back to all personas).
+ */
 export function parsePersonasFromIssue(issueBody: string): string[] {
   // Match the ## Personas section up to the next ## heading or end of string
   const sectionMatch = issueBody.match(/^##\s+Personas\s*\n([\s\S]*?)(?=^##\s|\s*$)/m);
@@ -86,4 +90,9 @@ export function parsePersonasFromIssue(issueBody: string): string[] {
   }
 
   return roles;
+}
+
+/** Clears the process-lifetime personas cache. Useful for testing. */
+export function clearPersonasCache(): void {
+  cachedRawConfig = null;
 }
