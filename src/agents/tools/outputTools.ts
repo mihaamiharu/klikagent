@@ -34,6 +34,24 @@ export const enrichmentDoneTool: AgentTool = {
   },
 };
 
+export const qaDoneTool: AgentTool = {
+  type: 'function',
+  function: {
+    name: 'done',
+    description: 'Submit the complete spec, POM, POM path, and affected test paths. Call this after validate_typescript confirms no errors.',
+    parameters: {
+      type: 'object',
+      properties: {
+        enrichedSpec: { type: 'string', description: 'Full Playwright TypeScript spec file content with real locators from browser snapshots' },
+        pomContent: { type: 'string', description: 'Full Page Object Model file content' },
+        pomPath: { type: 'string', description: 'Repo-relative path to write the POM file e.g. "pages/doctors/DoctorProfilePage.ts". Must match the exported class name exactly.' },
+        affectedPaths: { type: 'string', description: 'Comma-separated test paths affected by the PR diff e.g. "tests/web/auth/,tests/web/checkout/"' },
+      },
+      required: ['enrichedSpec', 'pomContent', 'pomPath', 'affectedPaths'],
+    },
+  },
+};
+
 export const reworkDoneTool: AgentTool = {
   type: 'function',
   function: {
