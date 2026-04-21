@@ -69,7 +69,7 @@ describe('parseJiraPayload — skip conditions', () => {
     expect(result).toBeNull();
   });
 
-  it('returns null when status maps to no flow (e.g. "In QA")', () => {
+  it('returns null when status maps to no label (e.g. "In QA")', () => {
     const result = parseJiraPayload(makePayload({
       changelog: { items: [{ field: 'status', fromString: 'Backlog', toString: 'In QA' }] },
     }));
@@ -84,19 +84,20 @@ describe('parseJiraPayload — skip conditions', () => {
   });
 });
 
-// ─── Flow mapping ─────────────────────────────────────────────────────────────
+// ─── Status label mapping ──────────────────────────────────────────────────────
 
-describe('parseJiraPayload — flow mapping', () => {
+describe('parseJiraPayload — status label mapping', () => {
   it.each([
-    ['In Progress', 1],
-    ['Ready for QA', 2],
-    ['Done', 3],
-  ] as const)('maps status "%s" to flow %d', (status, expectedFlow) => {
+    ['In Progress',  'status:in-progress'],
+    ['Ready for QA', 'status:ready-for-qa'],
+    ['Done',         'status:done'],
+  ] as const)('maps Jira status "%s" to label "%s"', (jiraStatus, expectedLabel) => {
     const result = parseJiraPayload(makePayload({
-      changelog: { items: [{ field: 'status', fromString: 'Backlog', toString: status }] },
+      changelog: { items: [{ field: 'status', fromString: 'Backlog', toString: jiraStatus }] },
     }));
     expect(result).not.toBeNull();
-    expect(result!.flow).toBe(expectedFlow);
+    expect(result!.status).toBe(expectedLabel);
+    expect(result!.flow).toBe(2);
   });
 });
 
@@ -123,13 +124,12 @@ describe('parseJiraPayload — context fields', () => {
   it('returns correct base fields for a valid payload', () => {
     const result = parseJiraPayload(makePayload());
     expect(result).toMatchObject({
-      flow: 1,
+      flow: 2,
       ticketId: 'KA-42',
       ticketSummary: 'Login form validation',
       ticketUrl: 'https://test.atlassian.net/browse/KA-42',
-      status: 'In Progress',
+      status: 'status:in-progress',
       previousStatus: 'Backlog',
-      project: 'KA',
       scope: 'web',
       isRework: false,
     });
@@ -180,6 +180,12 @@ describe('parseJiraPayload — context fields', () => {
     const after = new Date().toISOString();
     expect(result!.timestamp >= before).toBe(true);
     expect(result!.timestamp <= after).toBe(true);
+  });
+
+  it('does not include a project field (removed from TriggerContext)', () => {
+    const result = parseJiraPayload(makePayload());
+    expect(result).not.toBeNull();
+    expect((result as unknown as Record<string, unknown>)['project']).toBeUndefined();
   });
 });
 

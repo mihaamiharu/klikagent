@@ -1,10 +1,12 @@
 import { JiraWebhookPayload, TriggerContext } from '../../types';
 import { log } from '../../utils/logger';
 
-const STATUS_TO_FLOW: Record<string, 1 | 2 | 3> = {
-  'In Progress': 1,
-  'Ready for QA': 2,
-  'Done': 3,
+// Only "Ready for QA" triggers the flow — other statuses are no-ops at the parser level.
+// status:in-progress and other statuses are handled by the orchestrator as no-ops.
+const STATUS_TO_LABEL: Record<string, string> = {
+  'In Progress':  'status:in-progress',
+  'Ready for QA': 'status:ready-for-qa',
+  'Done':         'status:done',
 };
 
 function parseScope(labels: string[]): 'web' | 'api' | 'both' | 'none' {
@@ -52,10 +54,10 @@ export function parseJiraPayload(payload: JiraWebhookPayload): TriggerContext | 
   }
 
   const newStatus = statusChange.toString;
-  const flow = STATUS_TO_FLOW[newStatus];
+  const statusLabel = STATUS_TO_LABEL[newStatus];
 
-  if (flow === undefined) {
-    log('SKIP', `${issueKey} — reason: status "${newStatus}" has no mapped flow`);
+  if (statusLabel === undefined) {
+    log('SKIP', `${issueKey} — reason: status "${newStatus}" has no mapped label`);
     return null;
   }
 
@@ -69,13 +71,12 @@ export function parseJiraPayload(payload: JiraWebhookPayload): TriggerContext | 
   const ticketUrl = `${jiraBaseUrl}/browse/${issueKey}`;
 
   const context: TriggerContext = {
-    flow,
+    flow: 2,
     ticketId: issueKey,
     ticketSummary: payload.issue.fields.summary,
     ticketUrl,
-    status: newStatus,
+    status: statusLabel,
     previousStatus: statusChange.fromString,
-    project: payload.issue.fields.project.key,
     labels,
     scope,
     isRework: payload.issue.fields.issuetype.name === 'Rework',

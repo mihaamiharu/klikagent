@@ -1,6 +1,5 @@
-import { GitHubPRReviewPayload, GitHubWorkflowRunPayload, ReviewComment, ReviewContext, TriggerContext } from '../../types';
+import { GitHubPRReviewPayload, ReviewComment, ReviewContext, TriggerContext } from '../../types';
 import { log } from '../../utils/logger';
-import { fetchWorkflowRunInputs } from '../../utils/githubApi';
 
 const TICKET_FROM_BRANCH_RE = /^qa\/(KA-\d+)-/;
 
@@ -49,52 +48,12 @@ async function handlePRReview(payload: GitHubPRReviewPayload): Promise<ReviewCon
   };
 }
 
-async function handleWorkflowRun(payload: GitHubWorkflowRunPayload): Promise<TriggerContext | null> {
-  if (payload.action !== 'completed') {
-    log('SKIP', `workflow_run — reason: action is "${payload.action}", not "completed"`);
-    return null;
-  }
-
-  const workflowName = payload.workflow_run.name;
-  if (workflowName !== 'selective.yml' && workflowName !== 'smoke.yml') {
-    log('SKIP', `workflow_run — reason: not selective.yml or smoke.yml (got "${workflowName}")`);
-    return null;
-  }
-
-  const runId = payload.workflow_run.id;
-  const inputs = await fetchWorkflowRunInputs(runId);
-
-  log('ROUTE', `workflow_run → Flow 3 (${inputs.ticketId}, runType: ${inputs.runType}, runId: ${runId})`);
-
-  const context: TriggerContext = {
-    flow: 3,
-    ticketId: inputs.ticketId,
-    ticketSummary: '',
-    ticketUrl: '',
-    status: 'Done',
-    previousStatus: '',
-    project: '',
-    labels: [],
-    scope: 'none',
-    isRework: false,
-    runId,
-    runType: inputs.runType,
-    timestamp: new Date().toISOString(),
-  };
-
-  return context;
-}
-
 export async function parseGitHubPayload(
   eventType: string,
   payload: unknown
 ): Promise<TriggerContext | ReviewContext | null> {
   if (eventType === 'pull_request_review') {
     return handlePRReview(payload as GitHubPRReviewPayload);
-  }
-
-  if (eventType === 'workflow_run') {
-    return handleWorkflowRun(payload as GitHubWorkflowRunPayload);
   }
 
   log('SKIP', `GitHub event "${eventType}" — reason: unhandled event type`);
