@@ -193,10 +193,19 @@ async function takeSnapshot(page: Page): Promise<string> {
 // ─── Tool handlers ────────────────────────────────────────────────────────────
 
 async function handleNavigate(args: Record<string, unknown>): Promise<string> {
-  const url = String(args['url'] ?? '');
+  let url = String(args['url'] ?? '');
   const personaName = args['persona'] ? String(args['persona']) : 'default';
 
   if (!url) throw new Error('browser_navigate: url is required');
+
+  // Rewrite localhost URLs to QA_BASE_URL so the agent doesn't need to know the real host
+  const baseUrl = process.env.QA_BASE_URL ?? 'http://localhost:3000';
+  const localhostPattern = /^https?:\/\/localhost(:\d+)?/;
+  if (localhostPattern.test(url)) {
+    const parsed = new URL(url);
+    url = baseUrl.replace(/\/$/, '') + parsed.pathname + parsed.search + parsed.hash;
+    log('INFO', `[BrowserTools] Rewrote localhost URL to ${url}`);
+  }
 
   const session = await getOrCreateSession();
   const { page } = session;
@@ -206,7 +215,6 @@ async function handleNavigate(args: Record<string, unknown>): Promise<string> {
   const persona = personas.find((p) => p.name === personaName) ?? personas[0];
 
   if (persona) {
-    const baseUrl = process.env.QA_BASE_URL ?? 'http://localhost:3000';
     const loginUrl = `${baseUrl}/login`;
     log('INFO', `[BrowserTools] Authenticating as persona "${persona.name}" at ${loginUrl}`);
 
@@ -274,7 +282,9 @@ async function handleClose(_args: Record<string, unknown>): Promise<string> {
 
 // ─── OpenAI tool definitions ──────────────────────────────────────────────────
 
-export const browserTools: AgentTool[] = [
+export function buildBrowserTools(): AgentTool[] {
+  const baseUrl = process.env.QA_BASE_URL ?? 'http://localhost:3000';
+  return [
   {
     type: 'function',
     function: {
@@ -287,7 +297,7 @@ export const browserTools: AgentTool[] = [
         properties: {
           url: {
             type: 'string',
-            description: 'The fully-qualified URL to navigate to, e.g. "https://app.example.com/dashboard"',
+            description: `The fully-qualified URL to navigate to. The app base URL is "${baseUrl}" — use this as the host for all navigation (e.g. "${baseUrl}/dashboard").`,
           },
           persona: {
             type: 'string',
@@ -373,7 +383,10 @@ export const browserTools: AgentTool[] = [
       },
     },
   },
-];
+  ];
+}
+
+export const browserTools: AgentTool[] = buildBrowserTools();
 
 // ─── OpenAI tool handlers ─────────────────────────────────────────────────────
 
