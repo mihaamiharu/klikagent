@@ -33,22 +33,17 @@ export interface GitHubIssue {
 // Clean handoff object passed to the orchestrator
 // ticketId = GitHub issue number as string (e.g. "42")
 export interface TriggerContext {
-  flow: 1 | 2 | 3;
+  flow: 2;
   ticketId: string;               // GitHub issue number e.g. "42"
   ticketSummary: string;          // issue title
   ticketUrl: string;              // e.g. "https://github.com/owner/repo/issues/42"
-  status: string;                 // triggering label e.g. "status:in-progress"
+  status: string;                 // triggering label e.g. "status:ready-for-qa"
   previousStatus: string;         // empty string for label-based triggers
   labels: string[];               // all labels on the issue
   scope: 'web' | 'api' | 'both' | 'none';  // parsed from scope:* label
   isRework: boolean;              // true if issue has rework:* label
   parentTicketId?: string;        // parent issue number if rework subtask
   issue?: GitHubIssue;           // full issue object (passed from issues webhook, avoids re-fetch)
-  // Flow 3 only — populated from workflow_run event
-  runId?: number;                 // GitHub Actions run ID
-  runType?: 'new-tests' | 'affected' | 'smoke';
-  runConclusion?: string;        // "success" | "failure" | "cancelled" etc.
-  runUrl?: string;               // GitHub Actions run URL for linking in comments
   timestamp: string;              // ISO 8601
 }
 
@@ -76,28 +71,6 @@ export interface GitHubPRReviewPayload {
     name: string;
     full_name: string;
   };
-}
-
-// Incoming workflow_run webhook payload (subset)
-export interface GitHubWorkflowRunPayload {
-  action: string;                 // e.g. "completed"
-  workflow_run: {
-    id: number;
-    name: string;                 // e.g. "selective.yml" or "smoke.yml"
-    conclusion: string;           // e.g. "success", "failure"
-    workflow_id: number;
-    html_url: string;             // run URL for linking in comments
-  };
-  repository: {
-    name: string;
-    full_name: string;
-  };
-}
-
-// GitHub Actions run inputs — fetched via API, not in webhook payload
-export interface WorkflowRunInputs {
-  ticketId: string;               // e.g. "42"
-  runType: 'new-tests' | 'affected' | 'smoke';
 }
 
 // A single inline review comment on a PR

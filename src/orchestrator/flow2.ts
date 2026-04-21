@@ -1,12 +1,9 @@
 import { TriggerContext } from '../types';
 import { log } from '../utils/logger';
 import { runEnrichmentAgent } from '../agents/enrichmentAgent';
-import { runReworkAgent } from '../agents/reworkAgent';
 import { getIssue, commentOnIssue, transitionToInQA } from '../services/issues';
-import { getRouteMap, getKeywordMap } from '../services/testRepo';
-import { captureSnapshots } from '../services/crawler';
+import { getKeywordMap } from '../services/testRepo';
 import { detectFeature } from '../utils/featureDetector';
-import { resolveUrls } from '../utils/routeResolver';
 import { fetchPRDiff } from '../utils/diffAnalyzer';
 import {
   findPRByTicketId,
@@ -20,8 +17,6 @@ import {
 import { toSpecFileName } from '../utils/naming';
 import { pomPathFromContent } from '../agents/tools/outputTools';
 
-const QA_BASE_URL = () => process.env.QA_BASE_URL ?? 'http://localhost:3000';
-
 export async function flow2(context: TriggerContext): Promise<void> {
   log('INFO', `[Flow 2] Starting for issue #${context.ticketId}`);
 
@@ -29,10 +24,10 @@ export async function flow2(context: TriggerContext): Promise<void> {
   const keywordMap = await getKeywordMap().catch(() => ({} as Record<string, string[]>));
   const feature = detectFeature(issue.body, issue.labels, issue.title, keywordMap);
 
-  // Find QA branch created by flow1
+  // Find QA branch
   const branches = await findBranchesByPattern(testRepoName(), `qa/${context.ticketId}-`);
   if (branches.length === 0) {
-    throw new Error(`[Flow 2] No QA branch found for ticket ${context.ticketId} — has Flow 1 run?`);
+    throw new Error(`[Flow 2] No QA branch found for ticket ${context.ticketId}`);
   }
   const branch = branches[0];
   log('INFO', `[Flow 2] Using branch: ${branch}`);
@@ -45,45 +40,13 @@ export async function flow2(context: TriggerContext): Promise<void> {
     log('INFO', `[Flow 2] PR diff fetched (${prDiff.length} chars)`);
   }
 
-  // Resolve URLs and crawl
-  const routeMap = await getRouteMap().catch(() => ({} as Record<string, string>));
-  const paths = resolveUrls(feature, issue.body, routeMap);
-  const urls = paths.map((p) => `${QA_BASE_URL()}${p}`);
-
-  if (urls.length === 0) {
-    log('WARN', `[Flow 2] No URLs resolved for feature "${feature}" — crawling base URL`);
-    urls.push(QA_BASE_URL());
-  }
-
-  log('INFO', `[Flow 2] Crawling ${urls.length} URL(s): ${urls.join(', ')}`);
-  const snapshots = await captureSnapshots(urls);
-  log('INFO', `[Flow 2] Captured ${snapshots.length} snapshot(s)`);
-
-  // Run enrichment or rework agent
-  let specContent: string;
-  let pomContent: string;
-  let affectedPaths = `tests/web/${feature}/`;
-
-  let tokenUsage: import('../services/ai').TokenUsage;
-
-  let pomPath: string;
-
-  if (context.isRework && context.parentTicketId) {
-    log('INFO', `[Flow 2] Rework mode — parentTicketId: ${context.parentTicketId}`);
-    const parentIssue = await getIssue(Number(context.parentTicketId));
-    const result = await runReworkAgent(issue, parentIssue, feature, branch, snapshots);
-    specContent = result.patchedSpec;
-    pomContent = result.pomContent;
-    pomPath = result.pomPath;
-    tokenUsage = result.tokenUsage;
-  } else {
-    const result = await runEnrichmentAgent(issue, feature, branch, snapshots, prDiff);
-    specContent = result.enrichedSpec;
-    pomContent = result.pomContent;
-    pomPath = result.pomPath;
-    affectedPaths = result.affectedPaths;
-    tokenUsage = result.tokenUsage;
-  }
+  // Run enrichment agent (no crawling — snapshots passed as empty array until playwright/mcp lands)
+  const result = await runEnrichmentAgent(issue, feature, branch, [], prDiff);
+  const specContent = result.enrichedSpec;
+  const pomContent = result.pomContent;
+  const affectedPaths = result.affectedPaths;
+  const tokenUsage = result.tokenUsage;
+  let pomPath = `pages/${feature}/${feature.charAt(0).toUpperCase() + feature.slice(1)}Page.ts`;
 
   // Sanity-check: ensure pomPath matches the exported class name in the content
   const derivedPath = pomPathFromContent(pomContent, feature);
@@ -118,12 +81,10 @@ export async function flow2(context: TriggerContext): Promise<void> {
   await commentOnIssue(
     Number(context.ticketId),
     `🤖 **KlikAgent** — Enriched spec ready for QA!\n\n` +
-    `PR: ${prUrl}\n` +
-    `Crawled ${snapshots.length} page(s) from QA environment.\n\n` +
+    `PR: ${prUrl}\n\n` +
     `Issue moved to \`status:in-qa\`. Tests will run automatically on the PR.\n\n` +
     `> Tokens: ${tokenUsage.promptTokens.toLocaleString()} prompt + ${tokenUsage.completionTokens.toLocaleString()} completion = **${tokenUsage.totalTokens.toLocaleString()} total**`,
   );
 
   log('INFO', `[Flow 2] Done — PR opened: ${prUrl}`);
 }
-

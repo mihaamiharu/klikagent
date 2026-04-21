@@ -1,6 +1,5 @@
-import { GitHubIssue, GitHubIssueWebhookPayload, GitHubPRReviewPayload, GitHubWorkflowRunPayload, ReviewComment, ReviewContext, TriggerContext } from '../../types';
+import { GitHubIssue, GitHubIssueWebhookPayload, GitHubPRReviewPayload, ReviewComment, ReviewContext, TriggerContext } from '../../types';
 import { log } from '../../utils/logger';
-import { fetchWorkflowRunInputs } from '../../utils/githubApi';
 
 const TICKET_FROM_BRANCH_RE = /^qa\/(\d+)-/;
 
@@ -11,11 +10,14 @@ function handleIssueLabeled(payload: GitHubIssueWebhookPayload): TriggerContext 
   }
 
   const labelName = payload.label?.name ?? '';
-  let flow: 1 | 2 | null = null;
-  if (labelName === 'status:in-progress') flow = 1;
-  else if (labelName === 'status:ready-for-qa') flow = 2;
 
-  if (!flow) {
+  // status:in-progress is a no-op — Flow 1 (skeleton generation) has been removed
+  if (labelName === 'status:in-progress') {
+    log('INFO', `issues #${payload.issue.number} — status:in-progress is a no-op (Flow 1 removed)`);
+    return null;
+  }
+
+  if (labelName !== 'status:ready-for-qa') {
     log('SKIP', `issues #${payload.issue.number} — reason: label "${labelName}" is not a trigger`);
     return null;
   }
@@ -35,10 +37,10 @@ function handleIssueLabeled(payload: GitHubIssueWebhookPayload): TriggerContext 
     labels,
   };
 
-  log('ROUTE', `issues #${issue.number} labeled "${labelName}" → Flow ${flow}`);
+  log('ROUTE', `issues #${issue.number} labeled "${labelName}" → Flow 2`);
 
   return {
-    flow,
+    flow: 2,
     ticketId: String(issue.number),
     ticketSummary: issue.title,
     ticketUrl: issue.url,
@@ -77,7 +79,6 @@ async function handlePRReview(payload: GitHubPRReviewPayload): Promise<ReviewCon
   }
 
   const ticketId = match[1];
-  // TODO (Task 4.5): fetch real inline comments via GitHub API
   // For now, wrap the top-level review body as a synthetic ReviewComment
   const comments: ReviewComment[] = [];
 
@@ -98,43 +99,6 @@ async function handlePRReview(payload: GitHubPRReviewPayload): Promise<ReviewCon
   };
 }
 
-async function handleWorkflowRun(payload: GitHubWorkflowRunPayload): Promise<TriggerContext | null> {
-  if (payload.action !== 'completed') {
-    log('SKIP', `workflow_run — reason: action is "${payload.action}", not "completed"`);
-    return null;
-  }
-
-  const workflowName = payload.workflow_run.name;
-  if (workflowName !== 'selective.yml' && workflowName !== 'smoke.yml') {
-    log('SKIP', `workflow_run — reason: not selective.yml or smoke.yml (got "${workflowName}")`);
-    return null;
-  }
-
-  const runId = payload.workflow_run.id;
-  const inputs = await fetchWorkflowRunInputs(runId);
-
-  log('ROUTE', `workflow_run → Flow 3 (${inputs.ticketId}, runType: ${inputs.runType}, runId: ${runId})`);
-
-  const context: TriggerContext = {
-    flow: 3,
-    ticketId: inputs.ticketId,
-    ticketSummary: '',
-    ticketUrl: '',
-    status: 'Done',
-    previousStatus: '',
-    labels: [],
-    scope: 'none',
-    isRework: false,
-    runId,
-    runType: inputs.runType,
-    runConclusion: payload.workflow_run.conclusion,
-    runUrl: payload.workflow_run.html_url,
-    timestamp: new Date().toISOString(),
-  };
-
-  return context;
-}
-
 export async function parseGitHubPayload(
   eventType: string,
   payload: unknown
@@ -145,10 +109,6 @@ export async function parseGitHubPayload(
 
   if (eventType === 'pull_request_review') {
     return handlePRReview(payload as GitHubPRReviewPayload);
-  }
-
-  if (eventType === 'workflow_run') {
-    return handleWorkflowRun(payload as GitHubWorkflowRunPayload);
   }
 
   log('SKIP', `GitHub event "${eventType}" — reason: unhandled event type`);

@@ -1,6 +1,6 @@
 import { TriggerContext, ReviewContext } from '../../types';
 import { log } from '../../utils/logger';
-import { flow1, flow2, flow3 } from '../../orchestrator';
+import { flow2 } from '../../orchestrator';
 import { runReviewAgent } from '../../agents/reviewAgent';
 import { getReviewComments } from '../../services/github';
 
@@ -12,14 +12,10 @@ export async function routeGitHubEvent(result: TriggerContext | ReviewContext): 
   try {
     if (isTriggerContext(result)) {
       log('ROUTE', `GitHub TriggerContext → Flow ${result.flow} (${result.ticketId})`);
-      switch (result.flow) {
-        case 1: await flow1(result); break;
-        case 2: await flow2(result); break;
-        case 3: await flow3(result); break;
-        default: {
-          const exhaustive: never = result.flow;
-          log('ERROR', `Unknown flow: ${exhaustive}`);
-        }
+      if (result.flow === 2) {
+        await flow2(result);
+      } else {
+        log('INFO', `Flow ${result.flow} is a no-op — skipping`);
       }
     } else {
       log('ROUTE', `GitHub ReviewContext → Review Agent (${result.ticketId}, PR #${result.prNumber})`);
