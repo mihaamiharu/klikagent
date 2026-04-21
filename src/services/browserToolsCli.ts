@@ -28,10 +28,7 @@ const STATE_DIR = path.join(__dirname, '..', '.playwright-sessions');
 // ─── Shell helper ──────────────────────────────────────────────────────────────
 
 function getCliBase(): string {
-  if (__dirname.includes('/node_modules/')) {
-    return path.join(__dirname, '..', '..', '.bin', 'playwright-cli');
-  }
-  return path.join(__dirname, '..', 'node_modules', '.bin', 'playwright-cli');
+  return path.resolve(__dirname, '..', '..', 'node_modules', '.bin', 'playwright-cli');
 }
 
 interface CliResult {
