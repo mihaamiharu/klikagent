@@ -138,10 +138,17 @@ export async function runPlaywrightTest(specPath: string): Promise<{ passed: boo
 
   log('INFO', `[testRepoClone] Running playwright test: ${fullSpecPath}`);
 
+  execFileSync('npm', ['install', '--silent'], {
+    cwd: clonePath,
+    stdio: 'pipe',
+    timeout: 120_000,
+    env: { ...process.env },
+  });
+
   try {
     const stdout = execFileSync(
       'npx',
-      ['playwright', 'test', fullSpecPath, '--reporter=list'],
+      ['playwright@1.44.0', 'test', fullSpecPath, '--reporter=list'],
       {
         cwd: clonePath,
         stdio: 'pipe',
