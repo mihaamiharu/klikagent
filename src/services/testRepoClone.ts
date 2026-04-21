@@ -147,8 +147,8 @@ export async function runPlaywrightTest(specPath: string): Promise<{ passed: boo
 
   try {
     const stdout = execFileSync(
-      'npx',
-      ['playwright@1.44.0', 'test', fullSpecPath, '--reporter=list'],
+      './node_modules/.bin/playwright',
+      ['test', fullSpecPath, '--reporter=list'],
       {
         cwd: clonePath,
         stdio: 'pipe',
