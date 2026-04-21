@@ -13,11 +13,12 @@
  */
 
 export { browserTools, browserHandlers, getPersonas } from '../../services/browserTools';
+import { browserTools, browserHandlers } from '../../services/browserTools';
 import { AgentTool, ToolHandlers } from '../../types';
 import { repoToolDefs, repoToolHandlers } from './repoTools';
 import { githubToolDefs, githubToolHandlers } from './githubTools';
 import {
-  enrichmentDoneTool, reviewDoneTool,
+  enrichmentDoneTool, reviewDoneTool, qaDoneTool,
   validateTypescriptTool, validateTypescriptHandler,
 } from './outputTools';
 
@@ -30,3 +31,6 @@ export const enrichmentHandlers: ToolHandlers = merge(repoToolHandlers, validate
 
 export const reviewTools: AgentTool[] = [...repoToolDefs, ...githubToolDefs, validateTypescriptTool, reviewDoneTool];
 export const reviewHandlers: ToolHandlers = merge(repoToolHandlers, githubToolHandlers, validateTypescriptHandler);
+
+export const qaTools: AgentTool[] = [...browserTools, ...repoToolDefs, validateTypescriptTool, qaDoneTool];
+export const qaHandlers: ToolHandlers = merge(browserHandlers, repoToolHandlers, validateTypescriptHandler);
