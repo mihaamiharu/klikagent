@@ -26,12 +26,21 @@ function githubToken(): string {
  * otherwise runs `git pull` to fetch the latest changes.
  * Returns the local clone path.
  */
+function isGitRepo(dir: string): boolean {
+  try {
+    execFileSync('git', ['rev-parse', '--git-dir'], { cwd: dir, stdio: 'pipe' });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function ensureFreshClone(): Promise<string> {
   const clonePath = localClonePath();
   const token = githubToken();
   const repoUrl = `https://${token}@github.com/${ownerName()}/${testRepoName()}.git`;
 
-  if (fs.existsSync(clonePath)) {
+  if (fs.existsSync(clonePath) && isGitRepo(clonePath)) {
     log('INFO', `[testRepoClone] Pulling latest changes in ${clonePath}`);
     execFileSync('git', ['pull'], {
       cwd: clonePath,
