@@ -9,7 +9,7 @@ import { log } from '../utils/logger';
 function localClonePath(): string {
   const p = process.env.KLIKAGENT_TESTS_LOCAL_PATH;
   if (!p) throw new Error('KLIKAGENT_TESTS_LOCAL_PATH env var is not set');
-  return p;
+  return p.trim();
 }
 
 function githubToken(): string {
