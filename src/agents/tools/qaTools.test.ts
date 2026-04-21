@@ -23,12 +23,11 @@ describe('qaTools', () => {
     expect(toolNames).toContain('done');
   });
 
-  it('done tool requires enrichedSpec, pomContent, pomPath, affectedPaths', () => {
+  it('done tool requires enrichedSpec, poms, affectedPaths', () => {
     const doneTool = qaTools.find((t) => t.function.name === 'done')!;
     const required = doneTool.function.parameters.required as string[];
     expect(required).toContain('enrichedSpec');
-    expect(required).toContain('pomContent');
-    expect(required).toContain('pomPath');
+    expect(required).toContain('poms');
     expect(required).toContain('affectedPaths');
   });
 });

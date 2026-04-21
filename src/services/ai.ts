@@ -2,7 +2,7 @@ import OpenAI from 'openai';
 import { AgentTool, ToolHandlers } from '../types';
 import { log } from '../utils/logger';
 
-const DEFAULT_MAX_ITERATIONS = 20;
+const DEFAULT_MAX_ITERATIONS = parseInt(process.env.AI_MAX_ITERATIONS ?? '30', 10);
 const RETRYABLE_STATUS_CODES = new Set([429, 503, 529]);
 const DEFAULT_MAX_RETRIES = 4;
 const BASE_DELAY_MS = 2000;

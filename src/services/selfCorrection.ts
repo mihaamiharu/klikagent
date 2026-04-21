@@ -14,8 +14,7 @@ import { AgentTool, ToolHandlers } from '../types';
 
 export interface SelfCorrectionResult {
   specContent: string;
-  pomContent: string;
-  pomPath: string;
+  poms: Array<{ pomContent: string; pomPath: string }>;
   affectedPaths: string;
   tokenUsage: TokenUsage;
   warned: boolean;        // true if all attempts exhausted without passing tests
@@ -64,8 +63,7 @@ export async function runWithSelfCorrection(
   log('INFO', '[selfCorrection] Running initial qaAgent pass');
   const qaResult = await runQaAgent(issue, feature, branch, personas, startingUrls, prDiff);
   let specContent = qaResult.enrichedSpec;
-  const pomContent = qaResult.pomContent;
-  const pomPath = qaResult.pomPath;
+  const poms = qaResult.poms;
   const affectedPaths = qaResult.affectedPaths;
   let tokenUsage = qaResult.tokenUsage;
 
@@ -99,13 +97,16 @@ export async function runWithSelfCorrection(
   log('INFO', '[selfCorrection] Ensuring fresh clone');
   await ensureFreshClone();
   await writeSpecToClone(specPath, specContent);
+  for (const { pomContent, pomPath } of poms) {
+    await writeSpecToClone(pomPath, pomContent);
+  }
 
   log('INFO', `[selfCorrection] Running Playwright test (attempt ${attempts + 1})`);
   let testResult = await runPlaywrightTest(specPath);
 
   if (testResult.passed) {
     log('INFO', '[selfCorrection] Playwright test passed on first run');
-    return { specContent, pomContent, pomPath, affectedPaths, tokenUsage, warned: false };
+    return { specContent, poms, affectedPaths, tokenUsage, warned: false };
   }
 
   // Step 4: Retry loop
@@ -128,12 +129,12 @@ export async function runWithSelfCorrection(
 
     if (testResult.passed) {
       log('INFO', `[selfCorrection] Playwright test passed after ${attempts} correction(s)`);
-      return { specContent, pomContent, pomPath, affectedPaths, tokenUsage, warned: false };
+      return { specContent, poms, affectedPaths, tokenUsage, warned: false };
     }
   }
 
   // All attempts exhausted
   const warningMessage = `Self-correction exhausted all ${maxAttempts} attempt(s). Last Playwright error:\n${testResult.output}`;
   log('WARN', `[selfCorrection] ${warningMessage}`);
-  return { specContent, pomContent, pomPath, affectedPaths, tokenUsage, warned: true, warningMessage };
+  return { specContent, poms, affectedPaths, tokenUsage, warned: true, warningMessage };
 }

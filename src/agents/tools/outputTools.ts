@@ -38,16 +38,26 @@ export const qaDoneTool: AgentTool = {
   type: 'function',
   function: {
     name: 'done',
-    description: 'Submit the complete spec, POM, POM path, and affected test paths. Call this after validate_typescript confirms no errors.',
+    description: 'Submit the complete spec, POM(s), POM path(s), and affected test paths. Call this after validate_typescript confirms no errors.',
     parameters: {
       type: 'object',
       properties: {
         enrichedSpec: { type: 'string', description: 'Full Playwright TypeScript spec file content with real locators from browser snapshots' },
-        pomContent: { type: 'string', description: 'Full Page Object Model file content' },
-        pomPath: { type: 'string', description: 'Repo-relative path to write the POM file e.g. "pages/doctors/DoctorProfilePage.ts". Must match the exported class name exactly.' },
+        poms: {
+          type: 'array',
+          description: 'List of Page Object Model files to write',
+          items: {
+            type: 'object',
+            properties: {
+              pomContent: { type: 'string', description: 'Full Page Object Model file content' },
+              pomPath: { type: 'string', description: 'Repo-relative path to write the POM file e.g. "pages/doctors/DoctorProfilePage.ts". Must match the exported class name exactly.' },
+            },
+            required: ['pomContent', 'pomPath'],
+          },
+        },
         affectedPaths: { type: 'string', description: 'Comma-separated test paths affected by the PR diff e.g. "tests/web/auth/,tests/web/checkout/"' },
       },
-      required: ['enrichedSpec', 'pomContent', 'pomPath', 'affectedPaths'],
+      required: ['enrichedSpec', 'poms', 'affectedPaths'],
     },
   },
 };

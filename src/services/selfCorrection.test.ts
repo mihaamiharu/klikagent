@@ -78,8 +78,7 @@ const baseIssue: GitHubIssue = {
 
 const baseQaResult = {
   enrichedSpec: 'import { test } from "@playwright/test";\ntest("pass", async () => {});',
-  pomContent: 'export class TestPage {}',
-  pomPath: 'pages/test/TestPage.ts',
+  poms: [{ pomContent: 'export class TestPage {}', pomPath: 'pages/test/TestPage.ts' }],
   affectedPaths: 'tests/web/test/',
   tokenUsage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
 };
@@ -110,7 +109,7 @@ describe('runWithSelfCorrection', () => {
     expect(result.warned).toBe(false);
     expect(result.warningMessage).toBeUndefined();
     expect(result.specContent).toBe(baseQaResult.enrichedSpec);
-    expect(result.pomContent).toBe(baseQaResult.pomContent);
+    expect(result.poms[0].pomContent).toBe(baseQaResult.poms[0].pomContent);
     expect(result.tokenUsage.totalTokens).toBe(150);
     expect(mockRunAgent).not.toHaveBeenCalled();
   });

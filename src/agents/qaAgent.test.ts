@@ -28,8 +28,7 @@ function makeAgentResult(overrides: object = {}) {
   return {
     args: {
       enrichedSpec: 'test("reviews", async () => {});',
-      pomContent: 'export class ReviewsPage {}',
-      pomPath: 'pages/reviews/ReviewsPage.ts',
+      poms: [{ pomContent: 'export class ReviewsPage {}', pomPath: 'pages/reviews/ReviewsPage.ts' }],
       affectedPaths: 'tests/web/reviews/',
       ...overrides,
     },
@@ -57,8 +56,8 @@ describe('runQaAgent', () => {
     );
 
     expect(result.enrichedSpec).toBe('test("reviews", async () => {});');
-    expect(result.pomContent).toBe('export class ReviewsPage {}');
-    expect(result.pomPath).toBe('pages/reviews/ReviewsPage.ts');
+    expect(result.poms[0].pomContent).toBe('export class ReviewsPage {}');
+    expect(result.poms[0].pomPath).toBe('pages/reviews/ReviewsPage.ts');
     expect(result.affectedPaths).toBe('tests/web/reviews/');
     expect(result.tokenUsage).toEqual({ promptTokens: 100, completionTokens: 50, totalTokens: 150 });
   });
