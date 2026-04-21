@@ -1,0 +1,20 @@
+services:
+  klikagent:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "4000:3000"
+    environment:
+      - NODE_ENV=production
+      - AI_API_KEY
+      - AI_BASE_URL
+      - AI_MODEL
+      - GITHUB_TOKEN
+      - GITHUB_WEBHOOK_SECRET
+      - GITHUB_OWNER
+      - GITHUB_MAIN_REPO
+      - GITHUB_TEST_REPO
+      - PORT
+      - QA_USER_EMAIL
+      - QA_USER_PASSWORD
+      - QA_BASE_URL

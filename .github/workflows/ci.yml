@@ -4,6 +4,9 @@ on:
   pull_request:
     branches:
       - main
+  push:
+    branches:
+      - main
 
 jobs:
   test:
@@ -23,3 +26,45 @@ jobs:
 
       - name: Run tests
         run: npm test
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Deploy to VPS
+        uses: appleboy/ssh-action@v1.2.0
+        env:
+          AI_API_KEY: ${{ secrets.AI_API_KEY }}
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          GH_WEBHOOK_SECRET: ${{ secrets.GH_WEBHOOK_SECRET }}
+          QA_USER_PASSWORD: ${{ secrets.QA_USER_PASSWORD }}
+          AI_BASE_URL: ${{ vars.AI_BASE_URL }}
+          AI_MODEL: ${{ vars.AI_MODEL }}
+          GH_OWNER: ${{ vars.GH_OWNER }}
+          GH_MAIN_REPO: ${{ vars.GH_MAIN_REPO }}
+          GH_TEST_REPO: ${{ vars.GH_TEST_REPO }}
+          PORT: ${{ vars.PORT }}
+          QA_USER_EMAIL: ${{ vars.QA_USER_EMAIL }}
+          QA_BASE_URL: ${{ vars.QA_BASE_URL }}
+        with:
+          host: 103.235.75.99
+          username: deploy
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          envs: AI_API_KEY,GH_TOKEN,GH_WEBHOOK_SECRET,QA_USER_PASSWORD,AI_BASE_URL,AI_MODEL,GH_OWNER,GH_MAIN_REPO,GH_TEST_REPO,PORT,QA_USER_EMAIL,QA_BASE_URL
+          script: |
+            set -e
+            DEPLOY_DIR=~/apps/klikagent
+            if [ ! -d "$DEPLOY_DIR" ]; then
+              git clone https://github.com/mihaamiharu/klikagent.git "$DEPLOY_DIR"
+            fi
+            cd "$DEPLOY_DIR"
+            git pull origin main
+            export GITHUB_TOKEN=$GH_TOKEN
+            export GITHUB_WEBHOOK_SECRET=$GH_WEBHOOK_SECRET
+            export GITHUB_OWNER=$GH_OWNER
+            export GITHUB_MAIN_REPO=$GH_MAIN_REPO
+            export GITHUB_TEST_REPO=$GH_TEST_REPO
+            docker compose up --build -d
+            docker image prune -f

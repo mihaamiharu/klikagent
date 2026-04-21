@@ -199,7 +199,20 @@ export async function openPR(
     base,
     draft,
   });
-  if (!res.ok) throw new Error(`openPR "${branch}": ${res.status} ${await res.text()}`);
+  if (!res.ok) {
+    if (res.status === 422) {
+      // PR already exists — fetch the existing one
+      const existing = await ghRequest(`/repos/${ownerName()}/${repo}/pulls?head=${ownerName()}:${branch}&state=open`);
+      if (existing.ok) {
+        const prs = await existing.json() as Array<{ html_url: string }>;
+        if (prs.length > 0) {
+          log('INFO', `PR already exists: ${prs[0].html_url}`);
+          return prs[0].html_url;
+        }
+      }
+    }
+    throw new Error(`openPR "${branch}": ${res.status} ${await res.text()}`);
+  }
   const pr = await res.json() as { html_url: string };
   log('INFO', `PR opened: ${pr.html_url}`);
   return pr.html_url;

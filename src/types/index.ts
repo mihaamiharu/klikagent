@@ -28,60 +28,22 @@ export interface GitHubIssue {
   labels: string[];
 }
 
-// ─── Jira (kept for Phase 2 backward compat — deleted in Task 4.5) ────────────
-
-// Raw Jira webhook payload (subset of fields we care about)
-export interface JiraWebhookPayload {
-  webhookEvent: string;           // e.g. "jira:issue_updated"
-  issue: {
-    key: string;                  // e.g. "KA-42"
-    self: string;                 // full API URL to the issue
-    fields: {
-      summary: string;
-      status: {
-        name: string;             // e.g. "In Progress"
-      };
-      project: {
-        key: string;              // e.g. "KA"
-      };
-      labels: string[];           // e.g. ["scope:web", "scope:api"]
-      description?: string;
-      issuetype: {
-        name: string;             // e.g. "Story", "Bug", "Rework"
-      };
-      parent?: {
-        key: string;              // e.g. "KA-40" — parent ticket if exists
-      };
-    };
-  };
-  changelog?: {
-    items: Array<{
-      field: string;              // e.g. "status"
-      fromString: string;         // previous status name
-      toString: string;           // new status name
-    }>;
-  };
-}
-
 // ─── Trigger context ──────────────────────────────────────────────────────────
 
 // Clean handoff object passed to the orchestrator
 // ticketId = GitHub issue number as string (e.g. "42")
 export interface TriggerContext {
-  flow: 1 | 2 | 3;
+  flow: 2;
   ticketId: string;               // GitHub issue number e.g. "42"
   ticketSummary: string;          // issue title
   ticketUrl: string;              // e.g. "https://github.com/owner/repo/issues/42"
-  status: string;                 // triggering label e.g. "status:in-progress"
+  status: string;                 // triggering label e.g. "status:ready-for-qa"
   previousStatus: string;         // empty string for label-based triggers
   labels: string[];               // all labels on the issue
   scope: 'web' | 'api' | 'both' | 'none';  // parsed from scope:* label
   isRework: boolean;              // true if issue has rework:* label
   parentTicketId?: string;        // parent issue number if rework subtask
-  project?: string;               // @deprecated — Jira project key (removed in Task 4.5)
-  // Flow 3 only — populated from workflow_run event
-  runId?: number;                 // GitHub Actions run ID
-  runType?: 'new-tests' | 'affected' | 'smoke';
+  issue?: GitHubIssue;           // full issue object (passed from issues webhook, avoids re-fetch)
   timestamp: string;              // ISO 8601
 }
 
@@ -109,28 +71,6 @@ export interface GitHubPRReviewPayload {
     name: string;
     full_name: string;
   };
-}
-
-// Incoming workflow_run webhook payload (subset)
-export interface GitHubWorkflowRunPayload {
-  action: string;                 // e.g. "completed"
-  workflow_run: {
-    id: number;
-    name: string;                 // e.g. "selective.yml" or "smoke.yml"
-    conclusion: string;           // e.g. "success", "failure"
-    workflow_id: number;
-    html_url: string;             // run URL for linking in comments
-  };
-  repository: {
-    name: string;
-    full_name: string;
-  };
-}
-
-// GitHub Actions run inputs — fetched via API, not in webhook payload
-export interface WorkflowRunInputs {
-  ticketId: string;               // e.g. "42"
-  runType: 'new-tests' | 'affected' | 'smoke';
 }
 
 // A single inline review comment on a PR
