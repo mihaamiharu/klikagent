@@ -30,9 +30,10 @@ const STATE_DIR = process.env.KLIKAGENT_TESTS_LOCAL_PATH
 // ─── Shell helper ──────────────────────────────────────────────────────────────
 
 function getCliBase(): string {
-  return __dirname.includes('/node_modules/')
-    ? path.join(__dirname, '..', '..', '.bin', 'playwright-cli')
-    : 'playwright-cli';
+  if (__dirname.includes('/node_modules/')) {
+    return path.join(__dirname, '..', '..', '.bin', 'playwright-cli');
+  }
+  return path.join(__dirname, '..', 'node_modules', '.bin', 'playwright-cli');
 }
 
 interface CliResult {
