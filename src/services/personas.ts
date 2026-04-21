@@ -78,6 +78,13 @@ export async function getPersonas(roles: string[]): Promise<PersonaMap> {
         throw err;
       }
     }
+    const email = result[role]?.email;
+    const password = result[role]?.password;
+    if (!email || email.trim() === '' || !password || password.trim() === '') {
+      if (defaultEmail && defaultPassword) {
+        result[role] = { email: defaultEmail, password: defaultPassword };
+      }
+    }
   }
 
   return result;
