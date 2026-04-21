@@ -67,6 +67,8 @@ jobs:
               git clone https://github.com/mihaamiharu/klikagent.git "$DEPLOY_DIR"
             fi
             cd "$DEPLOY_DIR"
+            git fetch origin main
+            git checkout -- docker-compose.yml 2>/dev/null || true
             git pull origin main
             export GITHUB_TOKEN=$GH_TOKEN
             export GITHUB_WEBHOOK_SECRET=$GH_WEBHOOK_SECRET
