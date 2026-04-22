@@ -8,6 +8,7 @@ export interface QATask {
   description: string;             // acceptance criteria / ticket body
   qaEnvUrl: string;                // QA environment URL to test against
   outputRepo: string;              // repo to commit specs to (e.g. "klikagent-tests")
+  callbackUrl?: string;            // if set, KlikAgent POSTs TaskResult here when done
   metadata?: Record<string, unknown>;  // source-specific extras (e.g. issueUrl, labels)
 }
 
