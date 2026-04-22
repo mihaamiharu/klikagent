@@ -71,14 +71,10 @@ describe('generateQaSpecFlow — happy path', () => {
       'klikagent-tests', 'qa/42-login-form-validation', 'sha-base-123',
     );
 
-    // Step 8: Self-correction ran
+    // Self-correction ran with task, branch, specPath
     expect(selfCorrection.runWithSelfCorrection).toHaveBeenCalledWith(
-      expect.objectContaining({ number: 42 }),
-      'general',
+      expect.objectContaining({ taskId: '42' }),
       'qa/42-login-form-validation',
-      [],
-      [],
-      '',
       expect.stringContaining('42-login-form-validation.spec.ts'),
     );
 

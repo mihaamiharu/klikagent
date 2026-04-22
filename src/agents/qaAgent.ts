@@ -1,11 +1,11 @@
-import { GitHubIssue } from '../types';
+import { QATask } from '../types';
 import { runAgent, TokenUsage } from '../services/ai';
 import { qaTools, qaHandlers } from './tools';
 
 const SYSTEM_PROMPT = `You are a senior QA engineer who writes complete Playwright TypeScript test specs and Page Object Models (POMs).
 
-You receive a GitHub issue, personas, starting URLs, and a PR diff. Your job is to:
-1. Navigate the live QA app as each persona using browser tools
+You receive a QA task with a description and a QA environment URL. Your job is to:
+1. Navigate the live QA app using browser tools starting from the provided URL
 2. Interact with pages to reach meaningful states (fill forms, click buttons, navigate through flows)
 3. Capture page snapshots to discover real locators
 4. Write a complete, runnable Playwright spec using ONLY locators observed in snapshots
@@ -20,7 +20,7 @@ Locator priority: snapshot refs first, then CSS selectors, then Playwright locat
 On locator failure: tool returns error JSON with a hint. Call browser_snapshot() to see current state.
 
 ## Browser exploration workflow
-- Call browser_navigate(url, persona) for each starting URL x persona combination
+- Call browser_navigate(url) to open the starting URL
 - After navigation, call browser_list_interactables() to see all clickable/fillable elements with their refs, roles, labels, and generated CSS selectors
 - Use the selector from browser_list_interactables output (never guess selectors like "input[name='email']")
 - Interact with the page: use browser_click and browser_fill with selectors from the interactables list
@@ -37,14 +37,13 @@ On locator failure: tool returns error JSON with a hint. Call browser_snapshot()
 - Use ONLY locators from the page snapshots - never invent selectors
 - Prefer snapshot refs > CSS selectors > Playwright locators (getByRole, getByText, getByLabel, getByPlaceholder, getByTestId)
 - Every test must have at least one assertion (expect)
-- Structure tests using the personas defined in the issue
 - Import from the POM using relative paths - never @pages, @helpers, @data aliases
 - CRITICAL: Call list_available_poms before writing imports. Only import POM classes that appear in that list OR the POM you are creating as pomContent. NEVER import a POM that does not exist in the list.
-- The pomPath field must be the repo-relative path matching the exported class name exactly e.g. "pages/doctors/DoctorProfilePage.ts"
-- The affectedPaths field should list test folders impacted by the PR diff
+- The pomPath field must be the repo-relative path matching the exported class name exactly e.g. "pages/general/LoginPage.ts"
+- The affectedPaths field should list test folders impacted by this task
 
 ## POM rules
-- POM file goes in: pages/{feature}/{ClassName}.ts
+- POM file goes in: pages/general/{ClassName}.ts
 - Exported class name must match the pomPath filename exactly
 - Use relative imports only
 - If the feature requires multiple POMs (e.g. one for a page and one for a sub-component), put all of them in the poms array in done()
@@ -72,62 +71,44 @@ On locator failure: tool returns error JSON with a hint. Call browser_snapshot()
 8. Call validate_typescript with your spec — fix any errors if returned
 9. If valid: call done() immediately. If errors: fix and repeat from step 8`;
 
-function buildUserMessage(
-  issue: GitHubIssue,
-  feature: string,
-  branch: string,
-  personas: string[],
-  startingUrls: string[],
-  prDiff: string
-): string {
-  const featureCap = feature.charAt(0).toUpperCase() + feature.slice(1);
+function buildUserMessage(task: QATask, branch: string): string {
   return `
-## Ticket
-Issue #${issue.number}: ${issue.title}
-Feature: ${feature}
+## Task
+ID: ${task.taskId}
+Title: ${task.title}
 Branch: ${branch}
 
 ## Acceptance Criteria
-${issue.body}
+${task.description}
 
-## Personas to test as
-${personas.length > 0 ? personas.map((p) => `- ${p}`).join('\n') : '- default'}
-
-## Starting URLs (navigate to each using browser_navigate)
-${startingUrls.length > 0 ? startingUrls.map((u) => `- ${u}`).join('\n') : '(no starting URLs provided - infer from feature name and get_route_map)'}
-
-## PR Diff (main dev repo - use this to determine affectedPaths)
-${prDiff || '(no diff available)'}
+## QA Environment
+Start here: ${task.qaEnvUrl}
 
 ## Your task
 1. Call get_context_docs and get_fixtures to understand project conventions
-2. Call get_existing_pom (feature: "${feature}") to read any existing POM
+2. Call get_existing_pom (feature: "general") to read any existing POM
 3. Call list_available_poms to see all existing page objects you may import
-4. Call get_existing_tests (feature: "${feature}") to see any existing specs
-5. Use browser_navigate for each starting URL x persona combination above
+4. Call get_existing_tests (feature: "general") to see any existing specs
+5. Use browser_navigate to open the QA environment URL above
 6. Interact with the page (browser_click, browser_fill) to reach states matching acceptance criteria
 7. Call browser_snapshot() after each interaction to capture real locators
 8. Call browser_close() when exploration is complete
 9. Write the full Playwright spec using ONLY locators from your snapshots
-10. Write or update POM(s) at pages/${feature}/ — each POM needs a matching pomPath. Put all POMs in the poms array.
+10. Write or update POM(s) at pages/general/ — each POM needs a matching pomPath. Put all POMs in the poms array.
 11. Call validate_typescript with your spec — if errors are returned, fix them and re-validate. If valid, proceed to step 12.
-12. Call done() with enrichedSpec, poms (array of {pomContent, pomPath}), and affectedPaths. If validation was valid, done() must be called immediately — do NOT write more code or re-validate.
+12. Call done() with enrichedSpec, poms (array of {pomContent, pomPath}), and affectedPaths.
 `.trim();
 }
 
 export async function runQaAgent(
-  issue: GitHubIssue,
-  feature: string,
+  task: QATask,
   branch: string,
-  personas: string[],
-  startingUrls: string[],
-  prDiff: string
 ): Promise<{ enrichedSpec: string; poms: Array<{ pomContent: string; pomPath: string }>; affectedPaths: string; tokenUsage: TokenUsage }> {
   const { args, tokenUsage } = await runAgent(
     SYSTEM_PROMPT,
-    buildUserMessage(issue, feature, branch, personas, startingUrls, prDiff),
+    buildUserMessage(task, branch),
     qaTools,
-    qaHandlers
+    qaHandlers,
   );
   return {
     enrichedSpec: args.enrichedSpec as string,
