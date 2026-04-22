@@ -104,6 +104,24 @@ export async function getParentSpec(branch: string, parentTicketId: string, feat
   return getFileOnBranch(testRepoName(), branch, specPath(feature, parentTicketId));
 }
 
+// ─── Schema files (structured context) ───────────────────────────────────────
+
+export async function getEntitiesSchema(): Promise<string> {
+  return await readFile('context/schema/entities.schema.json') ?? '';
+}
+
+export async function getApiContractsSchema(): Promise<string> {
+  return await readFile('context/schema/api-contracts.schema.json') ?? '';
+}
+
+export async function getConstraints(): Promise<string> {
+  return await readFile('context/schema/constraints.schema.json') ?? '';
+}
+
+export async function getSelectorPriority(): Promise<string> {
+  return await readFile('context/schema/selector-priority.schema.json') ?? '';
+}
+
 // ─── Write ────────────────────────────────────────────────────────────────────
 
 export async function writeFile(branch: string, path: string, content: string, message: string): Promise<void> {

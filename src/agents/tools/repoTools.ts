@@ -125,6 +125,38 @@ export const repoToolDefs: AgentTool[] = [
       parameters: { type: 'object', properties: {}, required: [] },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'get_entities_schema',
+      description: 'Get the typed entity definitions and relationships for CareSync as JSON. Includes field names, types, enums, invariants, and FK relationships. Use this to understand the canonical data model before generating tests.',
+      parameters: { type: 'object', properties: {}, required: [] },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'get_api_contracts_schema',
+      description: 'Get the full API contract schema as JSON — request/response shapes, status codes, auth requirements for every endpoint. Use this to validate that generated test requests match the real API.',
+      parameters: { type: 'object', properties: {}, required: [] },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'get_constraints',
+      description: 'Get the machine-readable test generation constraints — what NOT to do (hallucination-prone patterns) and what MUST be done (baseline coverage). Use this to self-validate generated tests.',
+      parameters: { type: 'object', properties: {}, required: [] },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'get_selector_priority',
+      description: 'Get the Playwright selector priority and anti-patterns for CareSync UI. Defines which locator strategies to prefer (getByTestId > getByLabel > getByRole > getByPlaceholder) and which to never use (XPath, nth, CSS classes). Use this when enriching skeleton tests.',
+      parameters: { type: 'object', properties: {}, required: [] },
+    },
+  },
 ];
 
 export const repoToolHandlers: ToolHandlers = {
@@ -151,4 +183,8 @@ export const repoToolHandlers: ToolHandlers = {
     await testRepo.getParentSpec(args.branch as string, args.parentTicketId as string, args.feature as string) ?? '(no parent spec found)',
   get_tsconfig: async () => await testRepo.getTsConfig(),
   get_playwright_config: async () => await testRepo.getPlaywrightConfig(),
+  get_entities_schema: async () => await testRepo.getEntitiesSchema(),
+  get_api_contracts_schema: async () => await testRepo.getApiContractsSchema(),
+  get_constraints: async () => await testRepo.getConstraints(),
+  get_selector_priority: async () => await testRepo.getSelectorPriority(),
 };
