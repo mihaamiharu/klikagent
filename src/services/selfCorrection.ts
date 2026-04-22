@@ -1,14 +1,9 @@
-import { GitHubIssue } from '../types';
+import { QATask } from '../types';
 import { runQaAgent } from '../agents/qaAgent';
 import { runAgent, TokenUsage } from './ai';
 import { validateTypescriptHandler } from '../agents/tools/outputTools';
 import { qaTools, qaHandlers } from '../agents/tools';
-import {
-  ensureFreshClone,
-  writeSpecToClone,
-  runPlaywrightTest,
-  maxSelfCorrectionAttempts,
-} from './testRepoClone';
+import { maxSelfCorrectionAttempts } from './testRepoClone';
 import { log } from '../utils/logger';
 import { AgentTool, ToolHandlers } from '../types';
 
@@ -17,7 +12,7 @@ export interface SelfCorrectionResult {
   poms: Array<{ pomContent: string; pomPath: string }>;
   affectedPaths: string;
   tokenUsage: TokenUsage;
-  warned: boolean;        // true if all attempts exhausted without passing tests
+  warned: boolean;        // true if tsc still failing after all attempts
   warningMessage?: string;
 }
 
@@ -48,93 +43,61 @@ const fixTools: AgentTool[] = [...qaTools.filter((t) => t.function.name !== 'don
 const fixHandlers: ToolHandlers = { ...qaHandlers };
 
 export async function runWithSelfCorrection(
-  issue: GitHubIssue,
-  feature: string,
+  task: QATask,
   branch: string,
-  personas: string[],
-  startingUrls: string[],
-  prDiff: string,
   specPath: string,
 ): Promise<SelfCorrectionResult> {
   const maxAttempts = maxSelfCorrectionAttempts();
-  let attempts = 0;
 
   // Step 1: Initial QA agent run
   log('INFO', '[selfCorrection] Running initial qaAgent pass');
-  const qaResult = await runQaAgent(issue, feature, branch, personas, startingUrls, prDiff);
+  const qaResult = await runQaAgent(task, branch);
   let specContent = qaResult.enrichedSpec;
   const poms = qaResult.poms;
   const affectedPaths = qaResult.affectedPaths;
   let tokenUsage = qaResult.tokenUsage;
 
-  // Step 2: TypeScript validation
-  log('INFO', '[selfCorrection] Running TypeScript validation');
-  const tsResultRaw = await validateTypescriptHandler.validate_typescript({ code: specContent });
-  const tsResult = JSON.parse(typeof tsResultRaw === 'string' ? tsResultRaw : JSON.stringify(tsResultRaw)) as {
-    valid: boolean;
-    errors: Array<{ line: number; message: string }>;
-  };
+  // Step 2: TypeScript validation loop — up to maxAttempts corrections
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const tsResultRaw = await validateTypescriptHandler.validate_typescript({ code: specContent });
+    const tsResult = JSON.parse(
+      typeof tsResultRaw === 'string' ? tsResultRaw : JSON.stringify(tsResultRaw)
+    ) as { valid: boolean; errors: Array<{ line: number; message: string }> };
 
-  if (!tsResult.valid) {
-    attempts += 1;
-    log('WARN', `[selfCorrection] TypeScript validation failed (attempt ${attempts}/${maxAttempts}). Errors: ${JSON.stringify(tsResult.errors)}`);
-
-    if (attempts <= maxAttempts) {
-      const tsErrors = tsResult.errors.map((e) => `Line ${e.line}: ${e.message}`).join('\n');
-      const { args, tokenUsage: fixUsage } = await runAgent(
-        'Fix the failing Playwright test. Output only the corrected spec content.',
-        `TypeScript validation errors:\n${tsErrors}\n\nSpec:\n${specContent}`,
-        fixTools,
-        fixHandlers,
-      );
-      tokenUsage = addTokenUsage(tokenUsage, fixUsage);
-      specContent = args.fixedSpec as string;
-      log('INFO', '[selfCorrection] TypeScript correction applied');
+    if (tsResult.valid) {
+      log('INFO', `[selfCorrection] TypeScript valid${attempt > 1 ? ` after ${attempt - 1} correction(s)` : ''}`);
+      return { specContent, poms, affectedPaths, tokenUsage, warned: false };
     }
-  }
 
-  // Step 3: Clone setup and initial playwright run
-  log('INFO', '[selfCorrection] Ensuring fresh clone');
-  await ensureFreshClone();
-  await writeSpecToClone(specPath, specContent);
-  for (const { pomContent, pomPath } of poms) {
-    await writeSpecToClone(pomPath, pomContent);
-  }
+    log('WARN', `[selfCorrection] TypeScript errors on attempt ${attempt}/${maxAttempts}: ${JSON.stringify(tsResult.errors)}`);
 
-  log('INFO', `[selfCorrection] Running Playwright test (attempt ${attempts + 1})`);
-  let testResult = await runPlaywrightTest(specPath);
+    if (attempt === maxAttempts) break;
 
-  if (testResult.passed) {
-    log('INFO', '[selfCorrection] Playwright test passed on first run');
-    return { specContent, poms, affectedPaths, tokenUsage, warned: false };
-  }
-
-  // Step 4: Retry loop
-  while (!testResult.passed && attempts < maxAttempts) {
-    attempts += 1;
-    log('WARN', `[selfCorrection] Playwright test failed. Running correction attempt ${attempts}/${maxAttempts}`);
-
+    const tsErrors = tsResult.errors.map((e) => `Line ${e.line}: ${e.message}`).join('\n');
     const { args, tokenUsage: fixUsage } = await runAgent(
-      'Fix the failing Playwright test. Output only the corrected spec content.',
-      `Playwright test failure output:\n${testResult.output}\n\nCurrent spec:\n${specContent}`,
+      'Fix the TypeScript errors in this Playwright spec. Output only the corrected spec content.',
+      `TypeScript errors:\n${tsErrors}\n\nSpec:\n${specContent}`,
       fixTools,
       fixHandlers,
     );
     tokenUsage = addTokenUsage(tokenUsage, fixUsage);
     specContent = args.fixedSpec as string;
-
-    await writeSpecToClone(specPath, specContent);
-    log('INFO', `[selfCorrection] Re-running Playwright test after correction ${attempts}`);
-    testResult = await runPlaywrightTest(specPath);
-
-    if (testResult.passed) {
-      log('INFO', `[selfCorrection] Playwright test passed after ${attempts} correction(s)`);
-      return { specContent, poms, affectedPaths, tokenUsage, warned: false };
-    }
+    log('INFO', `[selfCorrection] Applied TypeScript correction ${attempt}`);
   }
 
-  // All attempts exhausted
-  const warningMessage = `Self-correction exhausted all ${maxAttempts} attempt(s). Last Playwright error:\n${testResult.output}`;
+  // Final validation after last correction
+  const finalRaw = await validateTypescriptHandler.validate_typescript({ code: specContent });
+  const finalResult = JSON.parse(
+    typeof finalRaw === 'string' ? finalRaw : JSON.stringify(finalRaw)
+  ) as { valid: boolean; errors: Array<{ line: number; message: string }> };
+
+  if (finalResult.valid) {
+    log('INFO', `[selfCorrection] TypeScript valid after ${maxAttempts} correction(s)`);
+    return { specContent, poms, affectedPaths, tokenUsage, warned: false };
+  }
+
+  const errorSummary = finalResult.errors.map((e) => `Line ${e.line}: ${e.message}`).join('\n');
+  const warningMessage = `TypeScript still failing after ${maxAttempts} attempt(s):\n${errorSummary}`;
   log('WARN', `[selfCorrection] ${warningMessage}`);
   return { specContent, poms, affectedPaths, tokenUsage, warned: true, warningMessage };
 }
