@@ -1,23 +1,26 @@
-// ─── GitHub Issues (replaces Jira) ────────────────────────────────────────────
+// ─── QA Task (normalized payload from trigger services) ───────────────────────
 
-// Raw GitHub Issues webhook payload for `issues` event
-export interface GitHubIssueWebhookPayload {
-  action: string;               // e.g. "labeled"
-  label?: {
-    name: string;               // e.g. "status:in-progress"
-  };
-  issue: {
-    number: number;
-    title: string;
-    body: string | null;
-    html_url: string;
-    labels: Array<{ name: string }>;
-  };
-  repository: {
-    name: string;
-    full_name: string;
-  };
+// Trigger services (klikagent-github-trigger, jira-trigger, etc.) translate
+// their source events into this shape before calling POST /tasks.
+export interface QATask {
+  taskId: string;                  // e.g. "42" (GitHub issue number) or "JIRA-123"
+  title: string;                   // ticket title
+  description: string;             // acceptance criteria / ticket body
+  qaEnvUrl: string;                // QA environment URL to test against
+  outputRepo: string;              // repo to commit specs to (e.g. "klikagent-tests")
+  metadata?: Record<string, unknown>;  // source-specific extras (e.g. issueUrl, labels)
 }
+
+// Payload sent by CI to POST /tasks/:id/results after test run
+export interface TaskResult {
+  taskId: string;
+  passed: boolean;
+  summary: string;                 // human-readable result (e.g. "12 passed, 2 failed")
+  reportUrl?: string;              // link to CI HTML report or artifact
+  metadata?: Record<string, unknown>;
+}
+
+// ─── GitHub Issues ────────────────────────────────────────────────────────────
 
 // Clean issue object used by the issues service
 export interface GitHubIssue {
@@ -28,50 +31,7 @@ export interface GitHubIssue {
   labels: string[];
 }
 
-// ─── Trigger context ──────────────────────────────────────────────────────────
-
-// Clean handoff object passed to the orchestrator
-// ticketId = GitHub issue number as string (e.g. "42")
-export interface TriggerContext {
-  flow: 2;
-  ticketId: string;               // GitHub issue number e.g. "42"
-  ticketSummary: string;          // issue title
-  ticketUrl: string;              // e.g. "https://github.com/owner/repo/issues/42"
-  status: string;                 // triggering label e.g. "status:ready-for-qa"
-  previousStatus: string;         // empty string for label-based triggers
-  labels: string[];               // all labels on the issue
-  scope: 'web' | 'api' | 'both' | 'none';  // parsed from scope:* label
-  isRework: boolean;              // true if issue has rework:* label
-  parentTicketId?: string;        // parent issue number if rework subtask
-  issue?: GitHubIssue;           // full issue object (passed from issues webhook, avoids re-fetch)
-  timestamp: string;              // ISO 8601
-}
-
 // ─── GitHub ───────────────────────────────────────────────────────────────────
-
-// Incoming pull_request_review webhook payload (subset)
-export interface GitHubPRReviewPayload {
-  action: string;                 // e.g. "submitted"
-  review: {
-    id: number;
-    state: string;                // e.g. "CHANGES_REQUESTED", "APPROVED"
-    user: {
-      login: string;
-    };
-    body: string | null;
-  };
-  pull_request: {
-    number: number;
-    draft: boolean;
-    head: {
-      ref: string;                // branch name e.g. "qa/42-login-validation"
-    };
-  };
-  repository: {
-    name: string;
-    full_name: string;
-  };
-}
 
 // A single inline review comment on a PR
 export interface ReviewComment {
@@ -148,5 +108,5 @@ export type ToolHandlers = Record<string, (args: Record<string, unknown>) => Pro
 
 // ─── Handlers ─────────────────────────────────────────────────────────────────
 
-export type FlowHandler = (context: TriggerContext) => Promise<void>;
+export type QATaskHandler = (task: QATask) => Promise<void>;
 export type ReviewHandler = (context: ReviewContext) => Promise<void>;
