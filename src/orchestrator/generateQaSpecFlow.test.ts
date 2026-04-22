@@ -88,6 +88,18 @@ describe('generateQaSpecFlow — happy path', () => {
     );
   });
 
+  it('routes spec to tests/web/general when feature is not set', async () => {
+    await generateQaSpecFlow(makeTask());
+    const specPath = (selfCorrection.runWithSelfCorrection as jest.Mock).mock.calls[0][2] as string;
+    expect(specPath).toContain('tests/web/general/');
+  });
+
+  it('routes spec to tests/web/{feature} when feature is set', async () => {
+    await generateQaSpecFlow(makeTask({ feature: 'auth' }));
+    const specPath = (selfCorrection.runWithSelfCorrection as jest.Mock).mock.calls[0][2] as string;
+    expect(specPath).toContain('tests/web/auth/');
+  });
+
   it('does not call fetch when callbackUrl is not set', async () => {
     await generateQaSpecFlow(makeTask());
     expect(fetchSpy).not.toHaveBeenCalled();

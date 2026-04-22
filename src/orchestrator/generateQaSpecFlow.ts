@@ -9,10 +9,9 @@ import {
 } from '../services/github';
 import { toSpecFileName, toBranchSlug } from '../utils/naming';
 
-const FEATURE = 'general'; // TODO(Phase 4): derive from QATask once field is added
-
 export async function generateQaSpecFlow(task: QATask): Promise<void> {
-  log('INFO', `[generateQaSpecFlow] Starting for task ${task.taskId}`);
+  const feature = task.feature ?? 'general';
+  log('INFO', `[generateQaSpecFlow] Starting for task ${task.taskId} feature=${feature}`);
 
   // Create QA branch in the output repo
   const branch = toBranchSlug(task.taskId, task.title);
@@ -21,7 +20,7 @@ export async function generateQaSpecFlow(task: QATask): Promise<void> {
   log('INFO', `[generateQaSpecFlow] QA branch created: ${branch}`);
 
   // Derive spec path
-  const specPath = `tests/web/${FEATURE}/${toSpecFileName(task.taskId, task.title)}`;
+  const specPath = `tests/web/${feature}/${toSpecFileName(task.taskId, task.title)}`;
   log('INFO', `[generateQaSpecFlow] Spec path: ${specPath}`);
 
   // Run self-correction loop (QA agent + tsc validation)
@@ -36,7 +35,7 @@ export async function generateQaSpecFlow(task: QATask): Promise<void> {
   for (const { pomContent, pomPath } of poms) {
     await commitFile(
       task.outputRepo, branch, pomPath, pomContent,
-      `feat(pom): add ${FEATURE} POM for #${task.taskId} [klikagent]`,
+      `feat(pom): add ${feature} POM for #${task.taskId} [klikagent]`,
     );
   }
 
