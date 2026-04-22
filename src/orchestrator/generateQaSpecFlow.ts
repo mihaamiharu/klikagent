@@ -20,7 +20,7 @@ export async function generateQaSpecFlow(task: QATask): Promise<void> {
   log('INFO', `[generateQaSpecFlow] QA branch created: ${branch}`);
 
   // Derive spec path
-  const specPath = `tests/web/${feature}/${toSpecFileName(task.taskId, task.title)}`;
+  const specPath = `tests/web/${feature}/${toSpecFileName(task.title)}`;
   log('INFO', `[generateQaSpecFlow] Spec path: ${specPath}`);
 
   // Run self-correction loop (QA agent + tsc validation)
