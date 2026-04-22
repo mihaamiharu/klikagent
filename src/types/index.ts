@@ -8,6 +8,7 @@ export interface QATask {
   description: string;             // acceptance criteria / ticket body
   qaEnvUrl: string;                // QA environment URL to test against
   outputRepo: string;              // repo to commit specs to (e.g. "klikagent-tests")
+  feature?: string;                // feature area e.g. "auth", "billing" — routes spec path
   callbackUrl?: string;            // if set, KlikAgent POSTs TaskResult here when done
   metadata?: Record<string, unknown>;  // source-specific extras (e.g. issueUrl, labels)
 }
@@ -19,17 +20,6 @@ export interface TaskResult {
   summary: string;                 // human-readable result (e.g. "12 passed, 2 failed")
   reportUrl?: string;              // link to CI HTML report or artifact
   metadata?: Record<string, unknown>;
-}
-
-// ─── GitHub Issues ────────────────────────────────────────────────────────────
-
-// Clean issue object used by the issues service
-export interface GitHubIssue {
-  number: number;
-  title: string;
-  body: string;                 // empty string if null
-  url: string;
-  labels: string[];
 }
 
 // ─── GitHub ───────────────────────────────────────────────────────────────────

@@ -3,36 +3,36 @@ import { toBranchSlug, toReworkBranch, toPRTitle, toSpecFileName } from './namin
 // ─── toSpecFileName ───────────────────────────────────────────────────────────
 
 describe('toSpecFileName', () => {
-  it('combines ticketId and slugified title with .spec.ts extension', () => {
-    expect(toSpecFileName('21', 'Doctor Reviews Management')).toBe('21-doctor-reviews-management.spec.ts');
+  it('slugifies the title with .spec.ts extension', () => {
+    expect(toSpecFileName('Doctor Reviews Management')).toBe('doctor-reviews-management.spec.ts');
   });
 
   it('strips special characters from the title', () => {
-    expect(toSpecFileName('42', 'Login & Password Reset!')).toBe('42-login-password-reset.spec.ts');
+    expect(toSpecFileName('Login & Password Reset!')).toBe('login-password-reset.spec.ts');
   });
 
   it('collapses multiple spaces and hyphens to a single hyphen', () => {
-    expect(toSpecFileName('5', 'Patient  --  Admission')).toBe('5-patient-admission.spec.ts');
+    expect(toSpecFileName('Patient  --  Admission')).toBe('patient-admission.spec.ts');
   });
 
   it('lowercases the title', () => {
-    expect(toSpecFileName('1', 'AUTH LOGIN FLOW')).toBe('1-auth-login-flow.spec.ts');
+    expect(toSpecFileName('AUTH LOGIN FLOW')).toBe('auth-login-flow.spec.ts');
   });
 
-  it('truncates the slug portion to 40 characters', () => {
+  it('truncates the slug to 40 characters', () => {
     const longTitle = 'This is a very long title that definitely exceeds the forty character limit';
-    const result = toSpecFileName('1', longTitle);
-    const slug = result.replace(/^1-/, '').replace(/\.spec\.ts$/, '');
+    const result = toSpecFileName(longTitle);
+    const slug = result.replace(/\.spec\.ts$/, '');
     expect(slug.length).toBeLessThanOrEqual(40);
   });
 
   it('does not end with a hyphen after truncation', () => {
-    const result = toSpecFileName('99', 'a'.repeat(45));
+    const result = toSpecFileName('a'.repeat(45));
     expect(result).not.toMatch(/-\.spec\.ts$/);
   });
 
   it('handles a single-word title', () => {
-    expect(toSpecFileName('3', 'Patients')).toBe('3-patients.spec.ts');
+    expect(toSpecFileName('Patients')).toBe('patients.spec.ts');
   });
 });
 

@@ -35,7 +35,7 @@ function setupDefaultMocks(): void {
   (github.getDefaultBranchSha as jest.Mock).mockResolvedValue('sha-base-123');
   (github.createBranch as jest.Mock).mockResolvedValue(undefined);
   (naming.toBranchSlug as jest.Mock).mockReturnValue('qa/42-login-form-validation');
-  (naming.toSpecFileName as jest.Mock).mockReturnValue('42-login-form-validation.spec.ts');
+  (naming.toSpecFileName as jest.Mock).mockReturnValue('login-form-validation.spec.ts');
 
   (selfCorrection.runWithSelfCorrection as jest.Mock).mockResolvedValue({
     specContent: 'test("login", async () => {});',
@@ -77,7 +77,7 @@ describe('generateQaSpecFlow — happy path', () => {
     expect(selfCorrection.runWithSelfCorrection).toHaveBeenCalledWith(
       expect.objectContaining({ taskId: '42' }),
       'qa/42-login-form-validation',
-      expect.stringContaining('42-login-form-validation.spec.ts'),
+      expect.stringContaining('login-form-validation.spec.ts'),
     );
     expect(github.commitFile).toHaveBeenCalledTimes(2);
     expect(github.openPR).toHaveBeenCalledWith(
@@ -86,6 +86,18 @@ describe('generateQaSpecFlow — happy path', () => {
       expect.stringContaining('42'),
       expect.any(String),
     );
+  });
+
+  it('routes spec to tests/web/general when feature is not set', async () => {
+    await generateQaSpecFlow(makeTask());
+    const specPath = (selfCorrection.runWithSelfCorrection as jest.Mock).mock.calls[0][2] as string;
+    expect(specPath).toContain('tests/web/general/');
+  });
+
+  it('routes spec to tests/web/{feature} when feature is set', async () => {
+    await generateQaSpecFlow(makeTask({ feature: 'auth' }));
+    const specPath = (selfCorrection.runWithSelfCorrection as jest.Mock).mock.calls[0][2] as string;
+    expect(specPath).toContain('tests/web/auth/');
   });
 
   it('does not call fetch when callbackUrl is not set', async () => {

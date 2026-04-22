@@ -26,7 +26,7 @@ export function toPRTitle(ticketId: string, summary: string): string {
   return `[KlikAgent] ${ticketId}: ${summary}`;
 }
 
-// 42-short-summary.spec.ts
-export function toSpecFileName(ticketId: string, title: string): string {
-  return `${ticketId}-${slugify(title)}.spec.ts`;
+// login-form-validation.spec.ts
+export function toSpecFileName(title: string): string {
+  return `${slugify(title)}.spec.ts`;
 }
