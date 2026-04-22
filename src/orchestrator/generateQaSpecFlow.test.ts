@@ -1,26 +1,14 @@
 import { generateQaSpecFlow } from './generateQaSpecFlow';
-import { TriggerContext } from '../types';
+import { QATask } from '../types';
 
 // ─── Mocks ────────────────────────────────────────────────────────────────────
 
-jest.mock('../services/issues');
-jest.mock('../services/testRepo');
-jest.mock('../utils/featureDetector');
-jest.mock('../utils/diffAnalyzer');
-jest.mock('../utils/pagesResolver');
-jest.mock('../services/personas');
 jest.mock('../services/selfCorrection');
 jest.mock('../services/github');
 jest.mock('../utils/naming');
 jest.mock('../agents/tools/outputTools');
 jest.mock('../utils/logger', () => ({ log: jest.fn() }));
 
-import * as issues from '../services/issues';
-import * as testRepo from '../services/testRepo';
-import * as featureDetector from '../utils/featureDetector';
-import * as diffAnalyzer from '../utils/diffAnalyzer';
-import * as pagesResolver from '../utils/pagesResolver';
-import * as personas from '../services/personas';
 import * as selfCorrection from '../services/selfCorrection';
 import * as github from '../services/github';
 import * as naming from '../utils/naming';
@@ -28,45 +16,26 @@ import * as outputTools from '../agents/tools/outputTools';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function makeContext(overrides: Partial<TriggerContext> = {}): TriggerContext {
+const PR_URL = 'https://github.com/org/klikagent-tests/pull/5';
+const CALLBACK_URL = 'http://trigger.local/callback/tasks/42/results';
+
+function makeTask(overrides: Partial<QATask> = {}): QATask {
   return {
-    flow: 2,
-    ticketId: '42',
-    ticketSummary: 'Login form validation',
-    ticketUrl: 'https://github.com/org/repo/issues/42',
-    status: 'status:ready-for-qa',
-    previousStatus: '',
-    labels: ['scope:web', 'feature:auth'],
-    scope: 'web',
-    isRework: false,
-    timestamp: new Date().toISOString(),
+    taskId: '42',
+    title: 'Login form validation',
+    description: 'As a user I want to login',
+    qaEnvUrl: 'https://qa.example.com',
+    outputRepo: 'klikagent-tests',
+    metadata: { issueUrl: 'https://github.com/org/repo/issues/42' },
     ...overrides,
   };
 }
 
 function setupDefaultMocks(): void {
-  (issues.getIssue as jest.Mock).mockResolvedValue({
-    number: 42,
-    title: 'Login form validation',
-    body: 'As a user I want to login',
-    url: 'https://github.com/org/repo/issues/42',
-    labels: ['scope:web', 'feature:auth'],
-  });
-
-  (testRepo.getKeywordMap as jest.Mock).mockResolvedValue({ auth: ['login', 'password'] });
-  (featureDetector.detectFeature as jest.Mock).mockReturnValue('auth');
-  (personas.parsePersonasFromIssue as jest.Mock).mockReturnValue(['patient', 'doctor']);
-  (pagesResolver.resolveStartingUrls as jest.Mock).mockResolvedValue(['/login', '/auth']);
-
-  (github.findPRByTicketId as jest.Mock).mockResolvedValue({
-    number: 10, branch: 'feat/42-login', headSha: 'abc123', url: 'https://pr.url', isDraft: false,
-  });
-  (diffAnalyzer.fetchPRDiff as jest.Mock).mockResolvedValue('--- a/login.ts\n+++ b/login.ts\n@@ -1,1 +1,2 @@');
-
   (github.getDefaultBranchSha as jest.Mock).mockResolvedValue('sha-base-123');
   (github.createBranch as jest.Mock).mockResolvedValue(undefined);
   (naming.toBranchSlug as jest.Mock).mockReturnValue('qa/42-login-form-validation');
-  (naming.toSpecFileName as jest.Mock).mockReturnValue('42-login-form-validation.spec.ts');
+  (naming.toSpecFileName as jest.Mock).mockReturnValue('login-form-validation.spec.ts');
 
   (selfCorrection.runWithSelfCorrection as jest.Mock).mockResolvedValue({
     specContent: 'test("login", async () => {});',
@@ -77,180 +46,105 @@ function setupDefaultMocks(): void {
   });
 
   (outputTools.pomPathFromContent as jest.Mock).mockReturnValue('pages/auth/AuthPage.ts');
-
-  (github.testRepoName as jest.Mock).mockReturnValue('klikagent-tests');
-  (github.ownerName as jest.Mock).mockReturnValue('mihaamiharu');
-  (github.mainRepo as jest.Mock).mockReturnValue('caresync');
   (github.commitFile as jest.Mock).mockResolvedValue(undefined);
-  (github.openPR as jest.Mock).mockResolvedValue('https://github.com/org/klikagent-tests/pull/5');
-
-  (issues.transitionToInQA as jest.Mock).mockResolvedValue(undefined);
-  (issues.commentOnIssue as jest.Mock).mockResolvedValue(undefined);
+  (github.openPR as jest.Mock).mockResolvedValue(PR_URL);
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
+let fetchSpy: jest.SpyInstance;
+
 beforeEach(() => {
   jest.clearAllMocks();
   setupDefaultMocks();
+  fetchSpy = jest.spyOn(global, 'fetch').mockResolvedValue(
+    new Response(JSON.stringify({ received: true }), { status: 200 }),
+  );
+});
+
+afterEach(() => {
+  fetchSpy.mockRestore();
 });
 
 describe('generateQaSpecFlow — happy path', () => {
   it('calls all services in the correct order and opens a PR', async () => {
-    const ctx = makeContext();
-    await generateQaSpecFlow(ctx);
+    await generateQaSpecFlow(makeTask());
 
-    // Step 1: Issue fetched
-    expect(issues.getIssue).toHaveBeenCalledWith(42);
-
-    // Step 2: Feature detected
-    expect(featureDetector.detectFeature).toHaveBeenCalled();
-
-    // Step 3: Personas parsed
-    expect(personas.parsePersonasFromIssue).toHaveBeenCalled();
-
-    // Step 4: URLs resolved
-    expect(pagesResolver.resolveStartingUrls).toHaveBeenCalledWith('auth', expect.any(String));
-
-    // Step 5: PR diff fetched
-    expect(github.findPRByTicketId).toHaveBeenCalledWith('42', 'caresync');
-    expect(diffAnalyzer.fetchPRDiff).toHaveBeenCalled();
-
-    // Step 6: QA branch created
     expect(github.getDefaultBranchSha).toHaveBeenCalledWith('klikagent-tests');
     expect(github.createBranch).toHaveBeenCalledWith(
       'klikagent-tests', 'qa/42-login-form-validation', 'sha-base-123',
     );
-
-    // Step 8: Self-correction ran
     expect(selfCorrection.runWithSelfCorrection).toHaveBeenCalledWith(
-      expect.objectContaining({ number: 42 }),
-      'auth',
+      expect.objectContaining({ taskId: '42' }),
       'qa/42-login-form-validation',
-      ['patient', 'doctor'],
-      ['/login', '/auth'],
-      expect.any(String),
-      expect.stringContaining('42-login-form-validation.spec.ts'),
+      expect.stringContaining('login-form-validation.spec.ts'),
     );
-
-    // Step 10: Two commits made
     expect(github.commitFile).toHaveBeenCalledTimes(2);
-
-    // Step 11: PR opened
     expect(github.openPR).toHaveBeenCalledWith(
       'klikagent-tests',
       'qa/42-login-form-validation',
       expect.stringContaining('42'),
       expect.any(String),
     );
+  });
 
-    // Step 12: Issue transitioned
-    expect(issues.transitionToInQA).toHaveBeenCalledWith(42);
+  it('routes spec to tests/web/general when feature is not set', async () => {
+    await generateQaSpecFlow(makeTask());
+    const specPath = (selfCorrection.runWithSelfCorrection as jest.Mock).mock.calls[0][2] as string;
+    expect(specPath).toContain('tests/web/general/');
+  });
 
-    // Step 13: Issue commented — should contain PR URL
-    expect(issues.commentOnIssue).toHaveBeenCalledWith(
-      42,
-      expect.stringContaining('https://github.com/org/klikagent-tests/pull/5'),
+  it('routes spec to tests/web/{feature} when feature is set', async () => {
+    await generateQaSpecFlow(makeTask({ feature: 'auth' }));
+    const specPath = (selfCorrection.runWithSelfCorrection as jest.Mock).mock.calls[0][2] as string;
+    expect(specPath).toContain('tests/web/auth/');
+  });
+
+  it('does not call fetch when callbackUrl is not set', async () => {
+    await generateQaSpecFlow(makeTask());
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('POSTs TaskResult to callbackUrl when set', async () => {
+    await generateQaSpecFlow(makeTask({ callbackUrl: CALLBACK_URL }));
+
+    expect(fetchSpy).toHaveBeenCalledWith(
+      CALLBACK_URL,
+      expect.objectContaining({ method: 'POST' }),
     );
-  });
 
-  it('includes the number of starting URLs in the issue comment', async () => {
-    await generateQaSpecFlow(makeContext());
-
-    const commentBody = (issues.commentOnIssue as jest.Mock).mock.calls[0][1] as string;
-    expect(commentBody).toContain('URLs crawled: 2');
-  });
-
-  it('includes token usage in the issue comment', async () => {
-    await generateQaSpecFlow(makeContext());
-
-    const commentBody = (issues.commentOnIssue as jest.Mock).mock.calls[0][1] as string;
-    expect(commentBody).toContain('1,000');
-    expect(commentBody).toContain('500');
-    expect(commentBody).toContain('1,500');
+    const body = JSON.parse((fetchSpy.mock.calls[0][1] as RequestInit).body as string);
+    expect(body.taskId).toBe('42');
+    expect(body.passed).toBe(true);
+    expect(body.reportUrl).toBe(PR_URL);
   });
 });
 
 describe('generateQaSpecFlow — warned path', () => {
-  it('includes warning message in issue comment when result.warned is true', async () => {
-    const warningMessage = 'All 3 self-correction attempts exhausted. Playwright test still failing.';
+  beforeEach(() => {
     (selfCorrection.runWithSelfCorrection as jest.Mock).mockResolvedValue({
       specContent: 'test("login", async () => {});',
       poms: [{ pomContent: 'export class AuthPage {}', pomPath: 'pages/auth/AuthPage.ts' }],
       affectedPaths: 'tests/web/auth/',
       tokenUsage: { promptTokens: 2000, completionTokens: 1000, totalTokens: 3000 },
       warned: true,
-      warningMessage,
+      warningMessage: 'All 3 self-correction attempts exhausted.',
     });
-
-    await generateQaSpecFlow(makeContext());
-
-    const commentBody = (issues.commentOnIssue as jest.Mock).mock.calls[0][1] as string;
-    expect(commentBody).toContain('Warning');
-    expect(commentBody).toContain(warningMessage);
   });
 
-  it('still opens PR and transitions issue even when warned', async () => {
-    (selfCorrection.runWithSelfCorrection as jest.Mock).mockResolvedValue({
-      specContent: 'test("login", async () => {});',
-      poms: [{ pomContent: 'export class AuthPage {}', pomPath: 'pages/auth/AuthPage.ts' }],
-      affectedPaths: 'tests/web/auth/',
-      tokenUsage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
-      warned: true,
-      warningMessage: 'Playwright tests failed after 3 attempts.',
-    });
+  it('POSTs passed=false and warning in summary when warned', async () => {
+    await generateQaSpecFlow(makeTask({ callbackUrl: CALLBACK_URL }));
 
-    await generateQaSpecFlow(makeContext());
+    const body = JSON.parse((fetchSpy.mock.calls[0][1] as RequestInit).body as string);
+    expect(body.passed).toBe(false);
+    expect(body.summary).toContain('warnings');
+    expect(body.metadata.warned).toBe(true);
+    expect(body.metadata.warningMessage).toBe('All 3 self-correction attempts exhausted.');
+  });
 
+  it('still opens PR even when warned', async () => {
+    await generateQaSpecFlow(makeTask({ callbackUrl: CALLBACK_URL }));
     expect(github.openPR).toHaveBeenCalled();
-    expect(issues.transitionToInQA).toHaveBeenCalled();
-    expect(issues.commentOnIssue).toHaveBeenCalled();
-  });
-});
-
-describe('generateQaSpecFlow — no URLs / env fallback', () => {
-  it('passes empty array to runWithSelfCorrection when resolveStartingUrls fails', async () => {
-    (pagesResolver.resolveStartingUrls as jest.Mock).mockRejectedValue(
-      new Error('GITHUB_TOKEN not set'),
-    );
-
-    await generateQaSpecFlow(makeContext());
-
-    expect(selfCorrection.runWithSelfCorrection).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.anything(),
-      expect.anything(),
-      expect.anything(),
-      [],     // empty array fallback
-      expect.anything(),
-      expect.anything(),
-    );
-  });
-
-  it('comment mentions 0 URLs crawled when resolveStartingUrls returns empty', async () => {
-    (pagesResolver.resolveStartingUrls as jest.Mock).mockResolvedValue([]);
-
-    await generateQaSpecFlow(makeContext());
-
-    const commentBody = (issues.commentOnIssue as jest.Mock).mock.calls[0][1] as string;
-    expect(commentBody).toContain('URLs crawled: 0');
-  });
-
-  it('proceeds without PR diff when findPRByTicketId returns null', async () => {
-    (github.findPRByTicketId as jest.Mock).mockResolvedValue(null);
-
-    await generateQaSpecFlow(makeContext());
-
-    expect(diffAnalyzer.fetchPRDiff).not.toHaveBeenCalled();
-    expect(selfCorrection.runWithSelfCorrection).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.anything(),
-      expect.anything(),
-      expect.anything(),
-      expect.anything(),
-      '',   // empty prDiff
-      expect.anything(),
-    );
   });
 });
 
@@ -267,11 +161,25 @@ describe('generateQaSpecFlow — POM handling', () => {
       warned: false,
     });
 
-    await generateQaSpecFlow(makeContext());
+    await generateQaSpecFlow(makeTask());
 
-    // Should have 3 commitFile calls: spec, pom1, pom2
+    // spec + pom1 + pom2 = 3 commits
     expect((github.commitFile as jest.Mock).mock.calls.length).toBe(3);
     expect((github.commitFile as jest.Mock).mock.calls[1][2]).toBe('pages/auth/AuthPage.ts');
     expect((github.commitFile as jest.Mock).mock.calls[2][2]).toBe('pages/auth/LoginForm.ts');
+  });
+});
+
+describe('generateQaSpecFlow — callback resilience', () => {
+  it('does not throw if callback fetch fails', async () => {
+    fetchSpy.mockRejectedValue(new Error('Connection refused'));
+
+    await expect(generateQaSpecFlow(makeTask({ callbackUrl: CALLBACK_URL }))).resolves.not.toThrow();
+  });
+
+  it('does not throw if callback returns non-200', async () => {
+    fetchSpy.mockResolvedValue(new Response('Bad Gateway', { status: 502 }));
+
+    await expect(generateQaSpecFlow(makeTask({ callbackUrl: CALLBACK_URL }))).resolves.not.toThrow();
   });
 });
