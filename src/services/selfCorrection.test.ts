@@ -73,7 +73,7 @@ const baseQaResult = {
   enrichedSpec: 'import { test } from "@playwright/test";\ntest("pass", async () => {});',
   poms: [{ pomContent: 'export class TestPage {}', pomPath: 'pages/test/TestPage.ts' }],
   affectedPaths: 'tests/web/test/',
-  tokenUsage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
+  tokenUsage: { promptTokens: 100, completionTokens: 50, totalTokens: 150, costUSD: 0.001 },
 };
 
 const valid = JSON.stringify({ valid: true, errors: [] });
@@ -82,7 +82,7 @@ const invalid = (msgs: string[]) => JSON.stringify({
   errors: msgs.map((m, i) => ({ line: i + 1, message: m })),
 });
 
-function makeFixResult(fixedSpec: string, tokens = { promptTokens: 20, completionTokens: 10, totalTokens: 30 }) {
+function makeFixResult(fixedSpec: string, tokens = { promptTokens: 20, completionTokens: 10, totalTokens: 30, costUSD: 0.0002 }) {
   return { args: { fixedSpec }, tokenUsage: tokens };
 }
 
@@ -143,8 +143,8 @@ describe('runWithSelfCorrection', () => {
       .mockResolvedValueOnce(invalid(['error2']))
       .mockResolvedValueOnce(valid);
     mockRunAgent
-      .mockResolvedValueOnce(makeFixResult(fixedSpec, { promptTokens: 10, completionTokens: 5, totalTokens: 15 }))
-      .mockResolvedValueOnce(makeFixResult(fixedSpec, { promptTokens: 20, completionTokens: 10, totalTokens: 30 }));
+      .mockResolvedValueOnce(makeFixResult(fixedSpec, { promptTokens: 10, completionTokens: 5, totalTokens: 15, costUSD: 0.000125 }))
+      .mockResolvedValueOnce(makeFixResult(fixedSpec, { promptTokens: 20, completionTokens: 10, totalTokens: 30, costUSD: 0.00025 }));
 
     const result = await runWithSelfCorrection(baseTask, 'qa/42-test', 'tests/web/test/42.spec.ts');
 

@@ -42,10 +42,20 @@ export interface RunAgentOptions {
   maxIterations?: number;
 }
 
+// MiniMax M2.7 pricing (per 1M tokens) — update if model changes
+const PROMPT_COST_PER_M = 5;    // USD per 1M prompt tokens
+const COMPLETION_COST_PER_M = 10; // USD per 1M completion tokens
+
 export interface TokenUsage {
   promptTokens: number;
   completionTokens: number;
   totalTokens: number;
+  costUSD: number;
+}
+
+function computeCost(promptTokens: number, completionTokens: number): number {
+  return (promptTokens / 1_000_000) * PROMPT_COST_PER_M
+    + (completionTokens / 1_000_000) * COMPLETION_COST_PER_M;
 }
 
 export interface AgentRunResult {
@@ -142,8 +152,9 @@ export async function runAgent(
           promptTokens,
           completionTokens,
           totalTokens: promptTokens + completionTokens,
+          costUSD: computeCost(promptTokens, completionTokens),
         };
-        log('INFO', `[AI] tokens used — prompt: ${promptTokens}, completion: ${completionTokens}, total: ${tokenUsage.totalTokens}`);
+        log('INFO', `[AI] tokens used — prompt: ${promptTokens}, completion: ${completionTokens}, total: ${tokenUsage.totalTokens}, cost: $${tokenUsage.costUSD.toFixed(4)}`);
         return { args, tokenUsage };
       }
 
