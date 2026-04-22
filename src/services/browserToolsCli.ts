@@ -18,7 +18,6 @@
 import { exec } from 'child_process';
 import { AgentTool, ToolHandlers } from '../types';
 import { log } from '../utils/logger';
-import { getPersonas } from './personas';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -72,25 +71,25 @@ function cleanupExpiredSessions(): void {
   }
 }
 
-function personaStateFile(personaName: string): string {
-  const dir = STATE_DIR;
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-  return path.join(dir, `${personaName}.json`);
+function adminStateFile(): string {
+  if (!fs.existsSync(STATE_DIR)) fs.mkdirSync(STATE_DIR, { recursive: true });
+  return path.join(STATE_DIR, 'admin.json');
 }
 
-async function authenticatePersona(personaName: string): Promise<void> {
-  const stateFile = personaStateFile(personaName);
+async function authenticateAdmin(): Promise<void> {
+  const stateFile = adminStateFile();
   cleanupExpiredSessions();
+
   if (fs.existsSync(stateFile)) {
     await cli('state-load', stateFile);
-    log('INFO', `[BrowserTools] Loaded persona state for "${personaName}" from ${stateFile}`);
+    log('INFO', `[BrowserTools] Loaded admin session from ${stateFile}`);
     return;
   }
 
-  const personaMap = await getPersonas([personaName]);
-  const persona = personaMap[personaName] ?? Object.values(personaMap)[0];
-  if (!persona) {
-    log('WARN', `[BrowserTools] No credentials for persona "${personaName}" — skipping auth`);
+  const email = process.env.QA_ADMIN_EMAIL;
+  const password = process.env.QA_ADMIN_PASSWORD;
+  if (!email || !password) {
+    log('WARN', '[BrowserTools] QA_ADMIN_EMAIL / QA_ADMIN_PASSWORD not set — skipping auth');
     return;
   }
 
@@ -98,12 +97,12 @@ async function authenticatePersona(personaName: string): Promise<void> {
   const loginUrl = `${baseUrl}/login`;
 
   await cli('goto', loginUrl);
-  await cli('fill', 'input[name="email"]', persona.email);
-  await cli('fill', 'input[name="password"]', persona.password);
+  await cli('fill', 'input[name="email"]', email);
+  await cli('fill', 'input[name="password"]', password);
   await cli('click', 'button[type="submit"]');
   await cli('wait-for-load', 'networkidle');
   await cli('state-save', stateFile);
-  log('INFO', `[BrowserTools] Authenticated as "${personaName}" and saved state to ${stateFile}`);
+  log('INFO', `[BrowserTools] Authenticated as admin and saved state to ${stateFile}`);
 }
 
 // ─── Error shaping ─────────────────────────────────────────────────────────────
@@ -247,7 +246,6 @@ function parseSnapshotOutput(stdout: string): ParsedSnapshot {
 
 async function handleNavigate(args: Record<string, unknown>): Promise<string> {
   let url = String(args['url'] ?? '');
-  const personaName = String(args['persona'] ?? 'default');
 
   if (!url) throw new Error('browser_navigate: url is required');
 
@@ -260,7 +258,7 @@ async function handleNavigate(args: Record<string, unknown>): Promise<string> {
   }
 
   await ensureSession();
-  await authenticatePersona(personaName);
+  await authenticateAdmin();
 
   log('INFO', `[BrowserTools] Navigating to ${url}`);
   const result = await cli('goto', url);
@@ -394,8 +392,7 @@ export function buildBrowserTools(baseUrl: string): AgentTool[] {
         parameters: {
           type: 'object',
           properties: {
-            url: { type: 'string', description: `Full URL to navigate to.` },
-            persona: { type: 'string', description: 'Persona name to authenticate as (e.g. "default", "patient"). Defaults to "default".' },
+            url: { type: 'string', description: 'Full URL to navigate to.' },
           },
           required: ['url'],
         },
