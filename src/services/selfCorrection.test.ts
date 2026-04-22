@@ -1,13 +1,10 @@
 import { runWithSelfCorrection } from './selfCorrection';
-import { GitHubIssue } from '../types';
+import { QATask } from '../types';
 
 // ─── Mock dependencies ──────────────────────────────────────────────────────
 
 jest.mock('./testRepoClone', () => ({
-  ensureFreshClone: jest.fn().mockResolvedValue('/tmp/klikagent-tests'),
-  writeSpecToClone: jest.fn().mockResolvedValue(undefined),
-  runPlaywrightTest: jest.fn(),
-  maxSelfCorrectionAttempts: jest.fn().mockReturnValue(2),
+  maxSelfCorrectionAttempts: jest.fn().mockReturnValue(3),
 }));
 
 jest.mock('../agents/qaAgent', () => ({
@@ -42,9 +39,6 @@ jest.mock('../agents/tools', () => ({
   qaHandlers: {},
   browserTools: [],
   browserHandlers: {},
-  getPersonas: jest.fn(),
-  enrichmentTools: [],
-  enrichmentHandlers: {},
   reviewTools: [],
   reviewHandlers: {},
 }));
@@ -63,17 +57,16 @@ import * as ai from './ai';
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
 const mockRunQaAgent = qaAgentModule.runQaAgent as jest.MockedFunction<typeof qaAgentModule.runQaAgent>;
-const mockRunPlaywrightTest = testRepoClone.runPlaywrightTest as jest.MockedFunction<typeof testRepoClone.runPlaywrightTest>;
 const mockValidateTs = outputTools.validateTypescriptHandler.validate_typescript as jest.MockedFunction<typeof outputTools.validateTypescriptHandler.validate_typescript>;
 const mockRunAgent = ai.runAgent as jest.MockedFunction<typeof ai.runAgent>;
 const mockMaxAttempts = testRepoClone.maxSelfCorrectionAttempts as jest.MockedFunction<typeof testRepoClone.maxSelfCorrectionAttempts>;
 
-const baseIssue: GitHubIssue = {
-  number: 42,
-  title: 'Test issue',
-  body: 'Test body',
-  url: 'https://github.com/owner/repo/issues/42',
-  labels: [],
+const baseTask: QATask = {
+  taskId: '42',
+  title: 'Test feature',
+  description: 'As a user I want to test',
+  qaEnvUrl: 'https://qa.example.com',
+  outputRepo: 'klikagent-tests',
 };
 
 const baseQaResult = {
@@ -83,7 +76,11 @@ const baseQaResult = {
   tokenUsage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
 };
 
-const validTsResult = JSON.stringify({ valid: true, errors: [] });
+const valid = JSON.stringify({ valid: true, errors: [] });
+const invalid = (msgs: string[]) => JSON.stringify({
+  valid: false,
+  errors: msgs.map((m, i) => ({ line: i + 1, message: m })),
+});
 
 function makeFixResult(fixedSpec: string, tokens = { promptTokens: 20, completionTokens: 10, totalTokens: 30 }) {
   return { args: { fixedSpec }, tokenUsage: tokens };
@@ -93,18 +90,14 @@ function makeFixResult(fixedSpec: string, tokens = { promptTokens: 20, completio
 
 beforeEach(() => {
   jest.clearAllMocks();
-  mockMaxAttempts.mockReturnValue(2);
+  mockMaxAttempts.mockReturnValue(3);
   mockRunQaAgent.mockResolvedValue(baseQaResult);
-  mockValidateTs.mockResolvedValue(validTsResult);
+  mockValidateTs.mockResolvedValue(valid);
 });
 
 describe('runWithSelfCorrection', () => {
-  it('passes on first attempt — warned: false, no correction calls', async () => {
-    mockRunPlaywrightTest.mockResolvedValue({ passed: true, output: '' });
-
-    const result = await runWithSelfCorrection(
-      baseIssue, 'test', 'qa/42-test', [], [], '', 'tests/web/test/42.spec.ts'
-    );
+  it('passes on first tsc check — warned: false, no correction calls', async () => {
+    const result = await runWithSelfCorrection(baseTask, 'qa/42-test', 'tests/web/test/42.spec.ts');
 
     expect(result.warned).toBe(false);
     expect(result.warningMessage).toBeUndefined();
@@ -114,71 +107,63 @@ describe('runWithSelfCorrection', () => {
     expect(mockRunAgent).not.toHaveBeenCalled();
   });
 
-  it('fails once then passes — warned: false, runAgent called once', async () => {
+  it('fails tsc once then passes — warned: false, runAgent called once', async () => {
     const fixedSpec = 'import { test } from "@playwright/test";\ntest("fixed", async () => {});';
-    mockRunPlaywrightTest
-      .mockResolvedValueOnce({ passed: false, output: 'Error: locator not found' })
-      .mockResolvedValueOnce({ passed: true, output: '' });
+    mockValidateTs
+      .mockResolvedValueOnce(invalid(['Unexpected token']))
+      .mockResolvedValueOnce(valid);
     mockRunAgent.mockResolvedValue(makeFixResult(fixedSpec));
 
-    const result = await runWithSelfCorrection(
-      baseIssue, 'test', 'qa/42-test', [], [], '', 'tests/web/test/42.spec.ts'
-    );
+    const result = await runWithSelfCorrection(baseTask, 'qa/42-test', 'tests/web/test/42.spec.ts');
 
     expect(result.warned).toBe(false);
     expect(result.specContent).toBe(fixedSpec);
     expect(mockRunAgent).toHaveBeenCalledTimes(1);
-    // Token usage should accumulate
     expect(result.tokenUsage.totalTokens).toBe(150 + 30);
   });
 
-  it('exhausts all attempts — warned: true, warningMessage set', async () => {
-    mockRunPlaywrightTest.mockResolvedValue({ passed: false, output: 'Persistent failure' });
-    mockRunAgent.mockResolvedValue(makeFixResult('import { test } from "@playwright/test";\ntest("attempt", async () => {});'));
+  it('exhausts all tsc attempts — warned: true, warningMessage set', async () => {
+    const fixedSpec = 'import { test } from "@playwright/test";\ntest("attempt", async () => {});';
+    mockValidateTs.mockResolvedValue(invalid(['Persistent error']));
+    mockRunAgent.mockResolvedValue(makeFixResult(fixedSpec));
 
-    const result = await runWithSelfCorrection(
-      baseIssue, 'test', 'qa/42-test', [], [], '', 'tests/web/test/42.spec.ts'
-    );
+    const result = await runWithSelfCorrection(baseTask, 'qa/42-test', 'tests/web/test/42.spec.ts');
 
     expect(result.warned).toBe(true);
-    expect(result.warningMessage).toContain('Persistent failure');
-    expect(result.warningMessage).toContain('2');
+    expect(result.warningMessage).toContain('Persistent error');
+    expect(result.warningMessage).toContain('3');
+    // attempts: 1 fail → fix, 2 fail → fix, 3 fail → final check → warned
     expect(mockRunAgent).toHaveBeenCalledTimes(2);
   });
 
-  it('TS validation failure counts as attempt 1 — reduces remaining playwright retries', async () => {
-    const tsErrors = [{ line: 1, message: 'Unexpected token' }];
-    mockValidateTs.mockResolvedValue(JSON.stringify({ valid: false, errors: tsErrors }));
-
-    const fixedSpec = 'import { test } from "@playwright/test";\ntest("fixed-ts", async () => {});';
-    // runAgent for TS fix, then runAgent for playwright fix
+  it('accumulates token usage across all correction rounds', async () => {
+    const fixedSpec = 'import { test } from "@playwright/test";\ntest("fix2", async () => {});';
+    mockValidateTs
+      .mockResolvedValueOnce(invalid(['error1']))
+      .mockResolvedValueOnce(invalid(['error2']))
+      .mockResolvedValueOnce(valid);
     mockRunAgent
-      .mockResolvedValueOnce(makeFixResult(fixedSpec))
-      .mockResolvedValueOnce(makeFixResult(fixedSpec));
+      .mockResolvedValueOnce(makeFixResult(fixedSpec, { promptTokens: 10, completionTokens: 5, totalTokens: 15 }))
+      .mockResolvedValueOnce(makeFixResult(fixedSpec, { promptTokens: 20, completionTokens: 10, totalTokens: 30 }));
 
-    // Playwright always fails so we see how many attempts remain
-    mockRunPlaywrightTest.mockResolvedValue({ passed: false, output: 'playwright error' });
+    const result = await runWithSelfCorrection(baseTask, 'qa/42-test', 'tests/web/test/42.spec.ts');
 
-    const result = await runWithSelfCorrection(
-      baseIssue, 'test', 'qa/42-test', [], [], '', 'tests/web/test/42.spec.ts'
-    );
+    expect(result.warned).toBe(false);
+    expect(result.tokenUsage.totalTokens).toBe(150 + 15 + 30);
+  });
 
-    // TS fix = attempt 1, playwright fails, 1 remaining playwright correction attempt
-    // After 1 playwright correction attempt (attempt 2) → exhausted
-    expect(result.warned).toBe(true);
-    // runAgent: once for TS fix, once for playwright correction
-    expect(mockRunAgent).toHaveBeenCalledTimes(2);
-    expect(mockRunAgent).toHaveBeenNthCalledWith(
-      1,
-      'Fix the failing Playwright test. Output only the corrected spec content.',
-      expect.stringContaining('TypeScript validation errors'),
-      expect.any(Array),
-      expect.any(Object),
-    );
-    expect(mockRunAgent).toHaveBeenNthCalledWith(
-      2,
-      'Fix the failing Playwright test. Output only the corrected spec content.',
-      expect.stringContaining('playwright error'),
+  it('passes the correct error context to the fix agent', async () => {
+    const fixedSpec = 'import { test } from "@playwright/test";\ntest("fixed", async () => {});';
+    mockValidateTs
+      .mockResolvedValueOnce(invalid(['Cannot find module']))
+      .mockResolvedValueOnce(valid);
+    mockRunAgent.mockResolvedValue(makeFixResult(fixedSpec));
+
+    await runWithSelfCorrection(baseTask, 'qa/42-test', 'tests/web/test/42.spec.ts');
+
+    expect(mockRunAgent).toHaveBeenCalledWith(
+      expect.stringContaining('TypeScript errors'),
+      expect.stringContaining('Cannot find module'),
       expect.any(Array),
       expect.any(Object),
     );
