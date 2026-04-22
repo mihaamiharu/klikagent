@@ -1,65 +1,47 @@
-import { TriggerContext } from '../types';
+import { QATask, GitHubIssue } from '../types';
 import { log } from '../utils/logger';
-import { getIssue, commentOnIssue, transitionToInQA } from '../services/issues';
-import { getKeywordMap } from '../services/testRepo';
-import { detectFeature } from '../utils/featureDetector';
-import { fetchPRDiff } from '../utils/diffAnalyzer';
-import { resolveStartingUrls } from '../utils/pagesResolver';
-import { parsePersonasFromIssue } from '../services/personas';
+import { commentOnIssue, transitionToInQA } from '../services/issues';
 import { runWithSelfCorrection } from '../services/selfCorrection';
 import {
-  findPRByTicketId,
   getDefaultBranchSha,
   createBranch,
   openPR,
   commitFile,
   testRepoName,
-  ownerName,
-  mainRepo,
 } from '../services/github';
 import { toSpecFileName, toBranchSlug } from '../utils/naming';
 
-export async function generateQaSpecFlow(context: TriggerContext): Promise<void> {
-  log('INFO', `[generateQaSpecFlow] Starting for issue #${context.ticketId}`);
+export async function generateQaSpecFlow(task: QATask): Promise<void> {
+  log('INFO', `[generateQaSpecFlow] Starting for task ${task.taskId}`);
 
-  // Step 1: Fetch issue
-  const issue = await getIssue(Number(context.ticketId));
+  // Build a GitHubIssue-compatible object from QATask fields so downstream
+  // services (qaAgent, selfCorrection) don't need to know about QATask yet.
+  // TODO(Phase 3): replace with QATask directly once agents are refactored.
+  const issue: GitHubIssue = {
+    number: Number(task.taskId),
+    title: task.title,
+    body: task.description,
+    url: (task.metadata?.issueUrl as string | undefined) ?? '',
+    labels: [],
+  };
 
-  // Step 2: Detect feature
-  const keywordMap = await getKeywordMap().catch(() => ({} as Record<string, string[]>));
-  const feature = detectFeature(issue.body, issue.labels, issue.title, keywordMap);
-  log('INFO', `[generateQaSpecFlow] Feature detected: ${feature}`);
+  // TODO(Phase 3): feature, personas, startingUrls will be first-class QATask fields
+  const feature = 'general';
+  const personas: string[] = [];
+  const startingUrls: string[] = [];
+  const prDiff = '';
 
-  // Step 3: Parse personas from issue body
-  const personas = parsePersonasFromIssue(issue.body);
-  log('INFO', `[generateQaSpecFlow] Personas from issue: [${personas.join(', ')}]`);
-
-  // Step 4: Resolve starting URLs
-  const startingUrls = await resolveStartingUrls(feature, issue.body).catch((err: Error) => {
-    log('WARN', `[generateQaSpecFlow] resolveStartingUrls failed — ${err.message}. Falling back to empty array.`);
-    return [] as string[];
-  });
-  log('INFO', `[generateQaSpecFlow] Starting URLs (${startingUrls.length}): ${startingUrls.join(', ')}`);
-
-  // Step 5: Fetch PR diff from dev repo (best-effort)
-  let prDiff = '';
-  const devPR = await findPRByTicketId(context.ticketId, mainRepo()).catch(() => null);
-  if (devPR) {
-    prDiff = await fetchPRDiff(devPR.number, ownerName(), mainRepo(), process.env.GITHUB_TOKEN ?? '');
-    log('INFO', `[generateQaSpecFlow] PR diff fetched (${prDiff.length} chars)`);
-  }
-
-  // Step 6: Create QA branch
-  const branch = toBranchSlug(context.ticketId, issue.title);
-  const baseSha = await getDefaultBranchSha(testRepoName());
-  await createBranch(testRepoName(), branch, baseSha);
+  // Create QA branch in the output repo
+  const branch = toBranchSlug(task.taskId, task.title);
+  const baseSha = await getDefaultBranchSha(task.outputRepo);
+  await createBranch(task.outputRepo, branch, baseSha);
   log('INFO', `[generateQaSpecFlow] QA branch created: ${branch}`);
 
-  // Step 7: Derive spec path
-  const specPath = `tests/web/${feature}/${toSpecFileName(context.ticketId, issue.title)}`;
+  // Derive spec path
+  const specPath = `tests/web/${feature}/${toSpecFileName(task.taskId, task.title)}`;
   log('INFO', `[generateQaSpecFlow] Spec path: ${specPath}`);
 
-  // Step 8: Run self-correction loop (QA agent + validation)
+  // Run self-correction loop (QA agent + tsc validation)
   const result = await runWithSelfCorrection(
     issue,
     feature,
@@ -70,44 +52,39 @@ export async function generateQaSpecFlow(context: TriggerContext): Promise<void>
     specPath,
   );
 
-  let specContent = result.specContent;
-  const poms = result.poms;
-  const affectedPaths = result.affectedPaths;
-  const tokenUsage = result.tokenUsage;
+  const { specContent, poms, affectedPaths, tokenUsage } = result;
 
-  // Step 9: Commit spec + POMs to branch
+  // Commit spec + POMs to branch
   await commitFile(
-    testRepoName(), branch, specPath, specContent,
-    `feat(spec): add #${context.ticketId} spec [klikagent]`,
+    task.outputRepo, branch, specPath, specContent,
+    `feat(spec): add #${task.taskId} spec [klikagent]`,
   );
   for (const { pomContent, pomPath } of poms) {
     await commitFile(
-      testRepoName(), branch, pomPath, pomContent,
-      `feat(pom): add ${feature} POM for #${context.ticketId} [klikagent]`,
+      task.outputRepo, branch, pomPath, pomContent,
+      `feat(pom): add ${feature} POM for #${task.taskId} [klikagent]`,
     );
   }
 
-  // Step 11: Open PR in klikagent-tests
+  // Open draft PR in output repo
   const prUrl = await openPR(
-    testRepoName(),
+    task.outputRepo,
     branch,
-    `[QA] #${context.ticketId} ${issue.title}`,
-    `Automated test spec generated by KlikAgent.\n\nIssue: ${issue.url}\nFeature: \`${feature}\`\nAffected paths: \`${affectedPaths}\``,
+    `[QA] #${task.taskId} ${task.title}`,
+    `Automated QA spec generated by KlikAgent.\n\nTask: ${task.taskId}\nFeature: \`${feature}\`\nAffected paths: \`${affectedPaths}\``,
   );
 
-  // Step 12: Transition issue label
-  await transitionToInQA(Number(context.ticketId));
+  // Transition issue label + comment with result
+  await transitionToInQA(issue.number);
 
-  // Step 13: Comment on issue
   const warnBlock = result.warned
     ? `\n\n> ⚠️ **Warning:** ${result.warningMessage ?? 'Self-correction exhausted all attempts — spec may need manual review.'}`
     : '';
 
   await commentOnIssue(
-    Number(context.ticketId),
+    issue.number,
     `🤖 **KlikAgent** — QA spec generated!\n\n` +
     `PR: ${prUrl}\n\n` +
-    `URLs crawled: ${startingUrls.length}\n\n` +
     `Issue moved to \`status:in-qa\`. Tests will run automatically on the PR.\n\n` +
     `> Tokens: ${tokenUsage.promptTokens.toLocaleString()} prompt + ${tokenUsage.completionTokens.toLocaleString()} completion = **${tokenUsage.totalTokens.toLocaleString()} total**` +
     warnBlock,

@@ -462,7 +462,6 @@ export function buildBrowserTools(baseUrl: string): AgentTool[] {
   ];
 }
 
-export { getPersonas } from '../utils/personaUtils';
 export const browserTools: AgentTool[] = buildBrowserTools(
   process.env.QA_BASE_URL ?? 'http://localhost:3000'
 );
