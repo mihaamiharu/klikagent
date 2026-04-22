@@ -1,7 +1,8 @@
 import 'dotenv/config';
 import express, { Request, Response } from 'express';
-import { QATask, TaskResult } from '../types';
+import { QATask, TaskResult, ReviewContext } from '../types';
 import { orchestrate } from '../orchestrator';
+import { runReviewAgent } from '../agents/reviewAgent';
 import { log } from '../utils/logger';
 
 const app = express();
@@ -24,6 +25,31 @@ app.post('/tasks', (req: Request, res: Response) => {
 
   orchestrate(task).catch((err: Error) => {
     log('ERROR', `[tasks] Unhandled error for task ${task.taskId}: ${err.message}`);
+  });
+});
+
+// ─── POST /reviews ────────────────────────────────────────────────────────────
+// Trigger services call this endpoint when a CHANGES_REQUESTED review arrives.
+// Responds immediately and processes asynchronously.
+
+app.post('/reviews', (req: Request, res: Response) => {
+  const ctx = req.body as ReviewContext;
+
+  if (!ctx.prNumber || !ctx.branch || !ctx.ticketId || !ctx.reviewId || !ctx.reviewerLogin) {
+    res.status(400).json({ error: 'Missing required fields: prNumber, branch, ticketId, reviewId, reviewerLogin' });
+    return;
+  }
+
+  log('INFO', `POST /reviews — pr=#${ctx.prNumber} branch="${ctx.branch}" reviewer=${ctx.reviewerLogin}`);
+  res.status(202).json({ received: true, prNumber: ctx.prNumber });
+
+  // Derive feature from branch name: qa/<ticketId>-<feature>-* → second segment after ticketId
+  // e.g. "qa/42-auth-login-form" → "auth"; falls back to "general"
+  const featureMatch = ctx.branch.match(/^qa\/\d+-([^-]+)/);
+  const feature = featureMatch ? featureMatch[1] : 'general';
+
+  runReviewAgent(ctx, feature).catch((err: Error) => {
+    log('ERROR', `[reviews] Unhandled error for PR #${ctx.prNumber}: ${err.message}`);
   });
 });
 
