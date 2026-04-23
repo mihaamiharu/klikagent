@@ -21,6 +21,7 @@ function addTokenUsage(acc: TokenUsage, next: TokenUsage): TokenUsage {
     promptTokens: acc.promptTokens + next.promptTokens,
     completionTokens: acc.completionTokens + next.completionTokens,
     totalTokens: acc.totalTokens + next.totalTokens,
+    costUSD: acc.costUSD + next.costUSD,
   };
 }
 

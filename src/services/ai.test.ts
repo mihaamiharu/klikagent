@@ -71,7 +71,10 @@ describe('runAgent', () => {
 
     const { tokenUsage } = await runAgent('sys', 'msg', [], {});
 
-    expect(tokenUsage).toEqual({ promptTokens: 100, completionTokens: 50, totalTokens: 150 });
+    expect(tokenUsage.promptTokens).toBe(100);
+    expect(tokenUsage.completionTokens).toBe(50);
+    expect(tokenUsage.totalTokens).toBe(150);
+    expect(tokenUsage.costUSD).toBeCloseTo(0.001, 5);
   });
 
   it('accumulates tokens across multiple iterations', async () => {
@@ -83,7 +86,10 @@ describe('runAgent', () => {
       my_tool: async () => 'tool result',
     });
 
-    expect(tokenUsage).toEqual({ promptTokens: 300, completionTokens: 70, totalTokens: 370 });
+    expect(tokenUsage.promptTokens).toBe(300);
+    expect(tokenUsage.completionTokens).toBe(70);
+    expect(tokenUsage.totalTokens).toBe(370);
+    expect(tokenUsage.costUSD).toBeCloseTo(0.0022, 5);
   });
 
   it('handles missing usage field without crashing (treats as zero)', async () => {
@@ -94,7 +100,7 @@ describe('runAgent', () => {
 
     const { tokenUsage } = await runAgent('sys', 'msg', [], {});
 
-    expect(tokenUsage).toEqual({ promptTokens: 0, completionTokens: 0, totalTokens: 0 });
+    expect(tokenUsage).toEqual({ promptTokens: 0, completionTokens: 0, totalTokens: 0, costUSD: 0 });
   });
 
   // ─── Return value ────────────────────────────────────────────────────────

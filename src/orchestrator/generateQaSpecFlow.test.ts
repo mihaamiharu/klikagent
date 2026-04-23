@@ -41,7 +41,7 @@ function setupDefaultMocks(): void {
     specContent: 'test("login", async () => {});',
     poms: [{ pomContent: 'export class AuthPage {}', pomPath: 'pages/auth/AuthPage.ts' }],
     affectedPaths: 'tests/web/auth/',
-    tokenUsage: { promptTokens: 1000, completionTokens: 500, totalTokens: 1500 },
+    tokenUsage: { promptTokens: 1000, completionTokens: 500, totalTokens: 1500, costUSD: 0.01 },
     warned: false,
   });
 
@@ -126,7 +126,7 @@ describe('generateQaSpecFlow — warned path', () => {
       specContent: 'test("login", async () => {});',
       poms: [{ pomContent: 'export class AuthPage {}', pomPath: 'pages/auth/AuthPage.ts' }],
       affectedPaths: 'tests/web/auth/',
-      tokenUsage: { promptTokens: 2000, completionTokens: 1000, totalTokens: 3000 },
+      tokenUsage: { promptTokens: 2000, completionTokens: 1000, totalTokens: 3000, costUSD: 0.02 },
       warned: true,
       warningMessage: 'All 3 self-correction attempts exhausted.',
     });
@@ -157,7 +157,7 @@ describe('generateQaSpecFlow — POM handling', () => {
         { pomContent: 'export class LoginForm {}', pomPath: 'pages/auth/LoginForm.ts' },
       ],
       affectedPaths: 'tests/web/auth/',
-      tokenUsage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
+      tokenUsage: { promptTokens: 100, completionTokens: 50, totalTokens: 150, costUSD: 0.001 },
       warned: false,
     });
 

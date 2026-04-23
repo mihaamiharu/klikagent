@@ -32,7 +32,7 @@ function makeAgentResult(overrides: object = {}) {
       affectedPaths: 'tests/web/general/',
       ...overrides,
     },
-    tokenUsage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
+    tokenUsage: { promptTokens: 100, completionTokens: 50, totalTokens: 150, costUSD: 0.001 },
   };
 }
 
@@ -52,7 +52,7 @@ describe('runQaAgent', () => {
     expect(result.poms[0].pomContent).toBe('export class ReviewsPage {}');
     expect(result.poms[0].pomPath).toBe('pages/general/ReviewsPage.ts');
     expect(result.affectedPaths).toBe('tests/web/general/');
-    expect(result.tokenUsage).toEqual({ promptTokens: 100, completionTokens: 50, totalTokens: 150 });
+    expect(result.tokenUsage).toEqual({ promptTokens: 100, completionTokens: 50, totalTokens: 150, costUSD: 0.001 });
   });
 
   it('calls runAgent with qaTools and qaHandlers', async () => {
