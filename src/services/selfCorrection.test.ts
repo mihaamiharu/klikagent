@@ -70,6 +70,7 @@ const baseTask: QATask = {
 };
 
 const baseQaResult = {
+  feature: 'test',
   enrichedSpec: 'import { test } from "@playwright/test";\ntest("pass", async () => {});',
   poms: [{ pomContent: 'export class TestPage {}', pomPath: 'pages/test/TestPage.ts' }],
   affectedPaths: 'tests/web/test/',
@@ -97,7 +98,7 @@ beforeEach(() => {
 
 describe('runWithSelfCorrection', () => {
   it('passes on first tsc check — warned: false, no correction calls', async () => {
-    const result = await runWithSelfCorrection(baseTask, 'qa/42-test', 'tests/web/test/42.spec.ts');
+    const result = await runWithSelfCorrection(baseTask, 'qa/42-test');
 
     expect(result.warned).toBe(false);
     expect(result.warningMessage).toBeUndefined();
@@ -114,7 +115,7 @@ describe('runWithSelfCorrection', () => {
       .mockResolvedValueOnce(valid);
     mockRunAgent.mockResolvedValue(makeFixResult(fixedSpec));
 
-    const result = await runWithSelfCorrection(baseTask, 'qa/42-test', 'tests/web/test/42.spec.ts');
+    const result = await runWithSelfCorrection(baseTask, 'qa/42-test');
 
     expect(result.warned).toBe(false);
     expect(result.specContent).toBe(fixedSpec);
@@ -127,7 +128,7 @@ describe('runWithSelfCorrection', () => {
     mockValidateTs.mockResolvedValue(invalid(['Persistent error']));
     mockRunAgent.mockResolvedValue(makeFixResult(fixedSpec));
 
-    const result = await runWithSelfCorrection(baseTask, 'qa/42-test', 'tests/web/test/42.spec.ts');
+    const result = await runWithSelfCorrection(baseTask, 'qa/42-test');
 
     expect(result.warned).toBe(true);
     expect(result.warningMessage).toContain('Persistent error');
@@ -146,7 +147,7 @@ describe('runWithSelfCorrection', () => {
       .mockResolvedValueOnce(makeFixResult(fixedSpec, { promptTokens: 10, completionTokens: 5, totalTokens: 15 }))
       .mockResolvedValueOnce(makeFixResult(fixedSpec, { promptTokens: 20, completionTokens: 10, totalTokens: 30 }));
 
-    const result = await runWithSelfCorrection(baseTask, 'qa/42-test', 'tests/web/test/42.spec.ts');
+    const result = await runWithSelfCorrection(baseTask, 'qa/42-test');
 
     expect(result.warned).toBe(false);
     expect(result.tokenUsage.totalTokens).toBe(150 + 15 + 30);
@@ -159,7 +160,7 @@ describe('runWithSelfCorrection', () => {
       .mockResolvedValueOnce(valid);
     mockRunAgent.mockResolvedValue(makeFixResult(fixedSpec));
 
-    await runWithSelfCorrection(baseTask, 'qa/42-test', 'tests/web/test/42.spec.ts');
+    await runWithSelfCorrection(baseTask, 'qa/42-test');
 
     expect(mockRunAgent).toHaveBeenCalledWith(
       expect.stringContaining('TypeScript errors'),

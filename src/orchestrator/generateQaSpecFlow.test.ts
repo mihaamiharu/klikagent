@@ -38,6 +38,7 @@ function setupDefaultMocks(): void {
   (naming.toSpecFileName as jest.Mock).mockReturnValue('login-form-validation.spec.ts');
 
   (selfCorrection.runWithSelfCorrection as jest.Mock).mockResolvedValue({
+    feature: 'auth',
     specContent: 'test("login", async () => {});',
     poms: [{ pomContent: 'export class AuthPage {}', pomPath: 'pages/auth/AuthPage.ts' }],
     affectedPaths: 'tests/web/auth/',
@@ -77,7 +78,6 @@ describe('generateQaSpecFlow — happy path', () => {
     expect(selfCorrection.runWithSelfCorrection).toHaveBeenCalledWith(
       expect.objectContaining({ taskId: '42' }),
       'qa/42-login-form-validation',
-      expect.stringContaining('login-form-validation.spec.ts'),
     );
     expect(github.commitFile).toHaveBeenCalledTimes(2);
     expect(github.openPR).toHaveBeenCalledWith(
@@ -88,16 +88,26 @@ describe('generateQaSpecFlow — happy path', () => {
     );
   });
 
-  it('routes spec to tests/web/general when feature is not set', async () => {
+  it('routes spec to tests/web/{feature} using the feature returned by the agent', async () => {
+    // Default mock returns feature: 'auth' — spec should be committed to tests/web/auth/
     await generateQaSpecFlow(makeTask());
-    const specPath = (selfCorrection.runWithSelfCorrection as jest.Mock).mock.calls[0][2] as string;
-    expect(specPath).toContain('tests/web/general/');
+    const specCommitPath = (github.commitFile as jest.Mock).mock.calls[0][2] as string;
+    expect(specCommitPath).toContain('tests/web/auth/');
   });
 
-  it('routes spec to tests/web/{feature} when feature is set', async () => {
+  it('uses agent-determined feature even when task.feature hint differs', async () => {
+    // task.feature is a hint only — agent output is authoritative
+    (selfCorrection.runWithSelfCorrection as jest.Mock).mockResolvedValue({
+      feature: 'doctors',
+      specContent: 'test("doctors", async () => {});',
+      poms: [{ pomContent: 'export class DoctorsPage {}', pomPath: 'pages/doctors/DoctorsPage.ts' }],
+      affectedPaths: 'tests/web/doctors/',
+      tokenUsage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
+      warned: false,
+    });
     await generateQaSpecFlow(makeTask({ feature: 'auth' }));
-    const specPath = (selfCorrection.runWithSelfCorrection as jest.Mock).mock.calls[0][2] as string;
-    expect(specPath).toContain('tests/web/auth/');
+    const specCommitPath = (github.commitFile as jest.Mock).mock.calls[0][2] as string;
+    expect(specCommitPath).toContain('tests/web/doctors/');
   });
 
   it('does not call fetch when callbackUrl is not set', async () => {
@@ -123,6 +133,7 @@ describe('generateQaSpecFlow — happy path', () => {
 describe('generateQaSpecFlow — warned path', () => {
   beforeEach(() => {
     (selfCorrection.runWithSelfCorrection as jest.Mock).mockResolvedValue({
+      feature: 'auth',
       specContent: 'test("login", async () => {});',
       poms: [{ pomContent: 'export class AuthPage {}', pomPath: 'pages/auth/AuthPage.ts' }],
       affectedPaths: 'tests/web/auth/',
@@ -151,6 +162,7 @@ describe('generateQaSpecFlow — warned path', () => {
 describe('generateQaSpecFlow — POM handling', () => {
   it('commits all POMs from the poms array', async () => {
     (selfCorrection.runWithSelfCorrection as jest.Mock).mockResolvedValue({
+      feature: 'auth',
       specContent: 'test("login", async () => {});',
       poms: [
         { pomContent: 'export class AuthPage {}', pomPath: 'pages/auth/AuthPage.ts' },
