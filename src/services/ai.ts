@@ -87,7 +87,16 @@ export async function runAgent(
 
   // Cache tool results so duplicate calls don't re-inflate the context.
   // done() and validate_typescript are excluded — they're side-effectful or need fresh data.
-  const UNCACHEABLE_TOOLS = new Set(['done', 'validate_typescript']);
+  const UNCACHEABLE_TOOLS = new Set([
+    'done',
+    'validate_typescript',
+    'browser_navigate',
+    'browser_snapshot',
+    'browser_click',
+    'browser_fill',
+    'browser_list_interactables',
+    'browser_close',
+  ]);
   const toolCache = new Map<string, string>();
 
   for (let iteration = 0; iteration < maxIterations; iteration++) {

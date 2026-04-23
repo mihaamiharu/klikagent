@@ -171,7 +171,41 @@ const INTERACTABLE_ROLES = new Set([
   'menuitem', 'tab', 'option', 'menuitemcheckbox', 'menuitemradio',
 ]);
 
-function buildSelector(role: string, text: string, attrs: Record<string, string>): string {
+function buildPlaywrightLocator(role: string, text: string, attrs: Record<string, string>): string {
+  const safeText = text.replace(/"/g, '\\"');
+  switch (role) {
+    case 'textbox':
+      if (attrs['type'] === 'email') return `getByRole('textbox', { name: 'Email' })`;
+      if (attrs['type'] === 'password') return `getByRole('textbox', { name: 'Password' })`;
+      if (attrs['type'] === 'search') return `getByRole('searchbox')`;
+      if (safeText) return `getByPlaceholder('${safeText}')`;
+      return `getByRole('textbox')`;
+    case 'searchbox':
+      return `getByRole('searchbox')`;
+    case 'checkbox':
+      if (safeText) return `getByRole('checkbox', { name: '${safeText}' })`;
+      return `getByRole('checkbox')`;
+    case 'radio':
+      if (safeText) return `getByRole('radio', { name: '${safeText}' })`;
+      return `getByRole('radio')`;
+    case 'button':
+      if (safeText) return `getByRole('button', { name: '${safeText}' })`;
+      return `getByRole('button')`;
+    case 'link':
+      if (safeText) return `getByRole('link', { name: '${safeText}' })`;
+      return `getByRole('link')`;
+    case 'combobox':
+      if (safeText) return `getByRole('combobox', { name: '${safeText}' })`;
+      return `getByRole('combobox')`;
+    case 'switch':
+      return `getByRole('switch')`;
+    default:
+      if (safeText) return `getByRole('${role}', { name: '${safeText}' })`;
+      return `getByRole('${role}')`;
+  }
+}
+
+function buildCssSelector(role: string, text: string, attrs: Record<string, string>): string {
   const safeText = text.replace(/"/g, '\\"');
   switch (role) {
     case 'textbox':
@@ -211,6 +245,10 @@ function buildSelector(role: string, text: string, attrs: Record<string, string>
       if (safeText) return `${role}:has-text("${safeText}")`;
       return role;
   }
+}
+
+function buildSelector(role: string, text: string, attrs: Record<string, string>): string {
+  return buildPlaywrightLocator(role, text, attrs);
 }
 
 function parseSnapshotOutput(stdout: string): ParsedSnapshot {
