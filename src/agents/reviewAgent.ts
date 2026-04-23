@@ -17,10 +17,14 @@ Rules:
 - Call validate_typescript before done()
 - Call done() with fixedSpec, pomContent, and a commentReplies entry for every comment id`;
 
-function buildUserMessage(ctx: ReviewContext, feature: string): string {
+function buildUserMessage(ctx: ReviewContext, feature: string | undefined): string {
   const comments = ctx.comments
     .map((c) => `[id:${c.id}] ${c.path}:${c.line ?? '?'}\n${c.body}`)
     .join('\n\n---\n\n');
+
+  const featureHint = feature
+    ? `Feature hint (verify against list_available_poms): ${feature}`
+    : 'Feature: not provided — derive it from the branch name, file paths in review comments, and list_available_poms output';
 
   return `
 ## PR Review
@@ -28,17 +32,19 @@ PR #${ctx.prNumber} on ${ctx.repo}
 Branch: ${ctx.branch}
 Ticket: #${ctx.ticketId}
 Reviewer: ${ctx.reviewerLogin}
-Feature: ${feature}
+${featureHint}
 
 ## Review Comments
 ${comments}
 
 ## Your task
-1. Use get_skeleton_spec or get_current_pom to read the current spec and POM on this branch
-2. Use get_context_docs and get_fixtures for project conventions
-3. Fix every issue raised in the review comments
-4. Call validate_typescript to confirm the fixed spec compiles
-5. Call done() with:
+1. Call get_context_docs and get_fixtures for project conventions
+2. Call list_available_poms to verify the feature folder and available POMs
+3. Use get_current_pom (branch, feature) to read the current POM on this branch
+4. Use get_skeleton_spec (branch, ticketId, feature) to read the current spec
+5. Fix every issue raised in the review comments
+6. Call validate_typescript to confirm the fixed spec compiles
+7. Call done() with:
    - fixedSpec: the complete fixed spec file
    - pomContent: the complete POM file (updated if needed)
    - commentReplies: one entry per comment id with your reply text
@@ -47,7 +53,7 @@ ${comments}
 
 export async function runReviewAgent(
   ctx: ReviewContext,
-  feature: string
+  feature: string | undefined
 ): Promise<{
   fixedSpec: string;
   pomContent: string;

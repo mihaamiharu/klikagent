@@ -44,9 +44,9 @@ app.post('/reviews', (req: Request, res: Response) => {
   res.status(202).json({ received: true, prNumber: ctx.prNumber });
 
   // Derive feature from branch name: qa/<ticketId>-<feature>-* → second segment after ticketId
-  // e.g. "qa/42-auth-login-form" → "auth"; falls back to "general"
+  // e.g. "qa/42-auth-login-form" → "auth"; undefined if branch format doesn't match
   const featureMatch = ctx.branch.match(/^qa\/\d+-([^-]+)/);
-  const feature = featureMatch ? featureMatch[1] : 'general';
+  const feature = featureMatch ? featureMatch[1] : undefined;
 
   runReviewAgent(ctx, feature).catch((err: Error) => {
     log('ERROR', `[reviews] Unhandled error for PR #${ctx.prNumber}: ${err.message}`);

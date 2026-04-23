@@ -42,6 +42,7 @@ export const qaDoneTool: AgentTool = {
     parameters: {
       type: 'object',
       properties: {
+        feature: { type: 'string', description: 'The feature folder name you determined for this task (e.g. "auth", "doctors", "dashboard"). Must match an existing folder in pages/ or a key in fixtures/index.ts imports. NEVER use "general".' },
         enrichedSpec: { type: 'string', description: 'Full Playwright TypeScript spec file content with real locators from browser snapshots' },
         poms: {
           type: 'array',
@@ -50,14 +51,14 @@ export const qaDoneTool: AgentTool = {
             type: 'object',
             properties: {
               pomContent: { type: 'string', description: 'Full Page Object Model file content' },
-              pomPath: { type: 'string', description: 'Repo-relative path to write the POM file e.g. "pages/doctors/DoctorProfilePage.ts". Must match the exported class name exactly.' },
+              pomPath: { type: 'string', description: 'Repo-relative path to write the POM file e.g. "pages/auth/AuthPage.ts". Must match the exported class name exactly.' },
             },
             required: ['pomContent', 'pomPath'],
           },
         },
         affectedPaths: { type: 'string', description: 'Comma-separated test paths affected by the PR diff e.g. "tests/web/auth/,tests/web/checkout/"' },
       },
-      required: ['enrichedSpec', 'poms', 'affectedPaths'],
+      required: ['feature', 'enrichedSpec', 'poms', 'affectedPaths'],
     },
   },
 };

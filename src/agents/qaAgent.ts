@@ -37,13 +37,17 @@ On locator failure: tool returns error JSON with a hint. Call browser_snapshot()
 - Use ONLY locators from the page snapshots - never invent selectors
 - Prefer snapshot refs > CSS selectors > Playwright locators (getByRole, getByText, getByLabel, getByPlaceholder, getByTestId)
 - Every test must have at least one assertion (expect)
-- Import from the POM using relative paths - never @pages, @helpers, @data aliases
-- CRITICAL: Call list_available_poms before writing imports. Only import POM classes that appear in that list OR the POM you are creating as pomContent. NEVER import a POM that does not exist in the list.
-- The pomPath field must be the repo-relative path matching the exported class name exactly e.g. "pages/general/LoginPage.ts"
+- ALWAYS import test and expect from the project fixture layer — NEVER from @playwright/test directly:
+  import { test, expect } from '../../../fixtures';  (adjust the relative depth for the spec file location)
+- Check the get_fixtures output: if the POM you need is already registered as a fixture (e.g. authPage, doctorsPage), use it as a fixture parameter in the test function — do NOT construct it with new PageClass(page) manually
+- Import POM classes only when you are the one creating that POM in this task, or when it appears in list_available_poms. NEVER import a POM that does not exist.
+- The pomPath field must be the repo-relative path matching the exported class name exactly e.g. "pages/auth/AuthPage.ts"
 - The affectedPaths field should list test folders impacted by this task
 
 ## POM rules
-- POM file goes in: pages/general/{ClassName}.ts
+- POM file goes in: pages/{feature}/{ClassName}.ts  where {feature} is given explicitly in your task
+- NEVER use "general" as a feature folder — it does not exist in this repo and will cause an import error
+- NEVER invent a feature folder name. Only use feature names already present in fixtures/index.ts imports or in the pages/ directory listing from list_available_poms
 - Exported class name must match the pomPath filename exactly
 - Use relative imports only
 - If the feature requires multiple POMs (e.g. one for a page and one for a sub-component), put all of them in the poms array in done()
@@ -60,23 +64,35 @@ On locator failure: tool returns error JSON with a hint. Call browser_snapshot()
 - After validation passes, the ONLY acceptable next tool call is done()
 - In done(), pass all POMs in the poms array — each POM must include both pomContent and pomPath
 
+## Feature determination
+- After calling get_fixtures and list_available_poms, determine the correct feature name for this task
+- The feature must match an existing folder in pages/ (visible in list_available_poms output) or an existing import in fixtures/index.ts (e.g. "auth", "doctors", "dashboard", "patients")
+- If a feature hint is provided in the task, verify it against list_available_poms before using it
+- Output your chosen feature in the done() call — this is used to write the spec to the correct path
+
 ## Required tool call sequence
 1. Call get_context_docs and get_fixtures for project conventions
-2. Call get_existing_pom to check for an existing POM for this feature
-3. Call list_available_poms to see all existing page objects
-4. Call get_existing_tests to see any existing specs for this feature
-5. Use browser_navigate, browser_click, browser_fill, browser_snapshot to explore the app
-6. Call browser_close() when exploration is complete
-7. Write enrichedSpec and poms (array of {pomContent, pomPath}) using only observed locators
-8. Call validate_typescript with your spec — fix any errors if returned
-9. If valid: call done() immediately. If errors: fix and repeat from step 8`;
+2. Call list_available_poms to see all existing page objects and available feature folders
+3. Determine the feature name from the task context and available folders
+4. Call get_existing_pom (feature: <determined-feature>) to check for an existing POM
+5. Call get_existing_tests (feature: <determined-feature>) to see any existing specs
+6. Use browser_navigate, browser_click, browser_fill, browser_snapshot to explore the app
+7. Call browser_close() when exploration is complete
+8. Write enrichedSpec and poms (array of {pomContent, pomPath}) using only observed locators
+9. Call validate_typescript with your spec — fix any errors if returned
+10. If valid: call done() immediately with feature, enrichedSpec, poms, affectedPaths. If errors: fix and repeat from step 9`;
 
 function buildUserMessage(task: QATask, branch: string): string {
+  const featureHint = task.feature
+    ? `Feature hint (verify against list_available_poms before using): ${task.feature}`
+    : 'Feature: not provided — determine it from the task context and list_available_poms output';
+
   return `
 ## Task
 ID: ${task.taskId}
 Title: ${task.title}
 Branch: ${branch}
+${featureHint}
 
 ## Acceptance Criteria
 ${task.description}
@@ -85,25 +101,30 @@ ${task.description}
 Start here: ${task.qaEnvUrl}
 
 ## Your task
-1. Call get_context_docs and get_fixtures to understand project conventions
-2. Call get_existing_pom (feature: "general") to read any existing POM
-3. Call list_available_poms to see all existing page objects you may import
-4. Call get_existing_tests (feature: "general") to see any existing specs
+1. Call get_context_docs and get_fixtures to understand project conventions.
+   IMPORTANT: read fixtures/index.ts carefully — note which POMs are registered as fixtures and use
+   those fixture parameters in your tests instead of constructing page objects manually.
+2. Call list_available_poms to see all existing page objects and available feature folders.
+   Determine the correct feature name from these results and the task context.
+3. Call get_existing_pom with your determined feature to read any existing POM
+4. Call get_existing_tests with your determined feature to see any existing specs
 5. Use browser_navigate to open the QA environment URL above
 6. Interact with the page (browser_click, browser_fill) to reach states matching acceptance criteria
 7. Call browser_snapshot() after each interaction to capture real locators
 8. Call browser_close() when exploration is complete
 9. Write the full Playwright spec using ONLY locators from your snapshots
-10. Write or update POM(s) at pages/general/ — each POM needs a matching pomPath. Put all POMs in the poms array.
+   - Import from fixtures: import { test, expect } from '../../../fixtures';
+   - Use fixture parameters for any POM already registered in fixtures/index.ts
+10. Write or update POM(s) at pages/<your-determined-feature>/ — each POM needs a matching pomPath. Put all POMs in the poms array.
 11. Call validate_typescript with your spec — if errors are returned, fix them and re-validate. If valid, proceed to step 12.
-12. Call done() with enrichedSpec, poms (array of {pomContent, pomPath}), and affectedPaths.
+12. Call done() with feature (your determined feature name), enrichedSpec, poms, and affectedPaths.
 `.trim();
 }
 
 export async function runQaAgent(
   task: QATask,
   branch: string,
-): Promise<{ enrichedSpec: string; poms: Array<{ pomContent: string; pomPath: string }>; affectedPaths: string; tokenUsage: TokenUsage }> {
+): Promise<{ feature: string; enrichedSpec: string; poms: Array<{ pomContent: string; pomPath: string }>; affectedPaths: string; tokenUsage: TokenUsage }> {
   const { args, tokenUsage } = await runAgent(
     SYSTEM_PROMPT,
     buildUserMessage(task, branch),
@@ -111,6 +132,7 @@ export async function runQaAgent(
     qaHandlers,
   );
   return {
+    feature: args.feature as string,
     enrichedSpec: args.enrichedSpec as string,
     poms: args.poms as Array<{ pomContent: string; pomPath: string }>,
     affectedPaths: args.affectedPaths as string,

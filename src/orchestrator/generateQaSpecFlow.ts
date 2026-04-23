@@ -10,8 +10,7 @@ import {
 import { toSpecFileName, toBranchSlug } from '../utils/naming';
 
 export async function generateQaSpecFlow(task: QATask): Promise<void> {
-  const feature = task.feature ?? 'general';
-  log('INFO', `[generateQaSpecFlow] Starting for task ${task.taskId} feature=${feature}`);
+  log('INFO', `[generateQaSpecFlow] Starting for task ${task.taskId}${task.feature ? ` feature-hint=${task.feature}` : ''}`);
 
   // Create QA branch in the output repo
   const branch = toBranchSlug(task.taskId, task.title);
@@ -19,13 +18,16 @@ export async function generateQaSpecFlow(task: QATask): Promise<void> {
   await createBranch(task.outputRepo, branch, baseSha);
   log('INFO', `[generateQaSpecFlow] QA branch created: ${branch}`);
 
-  // Derive spec path
+  // Run self-correction loop (QA agent + tsc validation)
+  // The agent determines the feature from context; spec path is derived from its output
+  const result = await runWithSelfCorrection(task, branch);
+  const { feature, specContent, poms, affectedPaths, tokenUsage } = result;
+
+  log('INFO', `[generateQaSpecFlow] Agent determined feature=${feature}`);
+
+  // Derive spec path from agent-determined feature
   const specPath = `tests/web/${feature}/${toSpecFileName(task.title)}`;
   log('INFO', `[generateQaSpecFlow] Spec path: ${specPath}`);
-
-  // Run self-correction loop (QA agent + tsc validation)
-  const result = await runWithSelfCorrection(task, branch, specPath);
-  const { specContent, poms, affectedPaths, tokenUsage } = result;
 
   // Commit spec + POMs to branch
   await commitFile(

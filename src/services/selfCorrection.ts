@@ -8,6 +8,7 @@ import { log } from '../utils/logger';
 import { AgentTool, ToolHandlers } from '../types';
 
 export interface SelfCorrectionResult {
+  feature: string;
   specContent: string;
   poms: Array<{ pomContent: string; pomPath: string }>;
   affectedPaths: string;
@@ -46,13 +47,13 @@ const fixHandlers: ToolHandlers = { ...qaHandlers };
 export async function runWithSelfCorrection(
   task: QATask,
   branch: string,
-  specPath: string,
 ): Promise<SelfCorrectionResult> {
   const maxAttempts = maxSelfCorrectionAttempts();
 
   // Step 1: Initial QA agent run
   log('INFO', '[selfCorrection] Running initial qaAgent pass');
   const qaResult = await runQaAgent(task, branch);
+  const feature = qaResult.feature;
   let specContent = qaResult.enrichedSpec;
   const poms = qaResult.poms;
   const affectedPaths = qaResult.affectedPaths;
@@ -67,7 +68,7 @@ export async function runWithSelfCorrection(
 
     if (tsResult.valid) {
       log('INFO', `[selfCorrection] TypeScript valid${attempt > 1 ? ` after ${attempt - 1} correction(s)` : ''}`);
-      return { specContent, poms, affectedPaths, tokenUsage, warned: false };
+      return { feature, specContent, poms, affectedPaths, tokenUsage, warned: false };
     }
 
     log('WARN', `[selfCorrection] TypeScript errors on attempt ${attempt}/${maxAttempts}: ${JSON.stringify(tsResult.errors)}`);
@@ -94,11 +95,11 @@ export async function runWithSelfCorrection(
 
   if (finalResult.valid) {
     log('INFO', `[selfCorrection] TypeScript valid after ${maxAttempts} correction(s)`);
-    return { specContent, poms, affectedPaths, tokenUsage, warned: false };
+    return { feature, specContent, poms, affectedPaths, tokenUsage, warned: false };
   }
 
   const errorSummary = finalResult.errors.map((e) => `Line ${e.line}: ${e.message}`).join('\n');
   const warningMessage = `TypeScript still failing after ${maxAttempts} attempt(s):\n${errorSummary}`;
   log('WARN', `[selfCorrection] ${warningMessage}`);
-  return { specContent, poms, affectedPaths, tokenUsage, warned: true, warningMessage };
+  return { feature, specContent, poms, affectedPaths, tokenUsage, warned: true, warningMessage };
 }
