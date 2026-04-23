@@ -10,6 +10,7 @@ services:
       - AI_BASE_URL
       - AI_MODEL
       - GITHUB_TOKEN
+      - GITHUB_OWNER
       - GITHUB_TEST_REPO
       - QA_ENV_URL
       - QA_ADMIN_EMAIL
