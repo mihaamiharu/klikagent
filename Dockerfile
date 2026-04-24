@@ -7,7 +7,7 @@ RUN npm ci
 
 COPY tsconfig.json ./
 COPY src/ ./src/
-RUN npm run build
+RUN npm run build && mkdir -p dist/dashboard/public && cp src/dashboard/public/index.html dist/dashboard/public/
 
 # Stage 2: Runtime
 FROM node:20-bookworm-slim AS runner
