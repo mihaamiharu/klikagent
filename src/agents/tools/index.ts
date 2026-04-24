@@ -12,8 +12,8 @@
  *   await runAgent(systemPrompt, userMsg, browserTools, browserHandlers);
  */
 
-export { browserTools, browserHandlers } from '../../services/browserToolsCli';
-import { browserTools, browserHandlers } from '../../services/browserToolsCli';
+export { browserTools, browserHandlers } from '../../services/browserTools';
+import { browserTools, browserHandlers } from '../../services/browserTools';
 import { AgentTool, ToolHandlers } from '../../types';
 import { repoToolDefs, repoToolHandlers } from './repoTools';
 import { githubToolDefs, githubToolHandlers } from './githubTools';
