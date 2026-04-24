@@ -17,7 +17,7 @@ ENV NODE_ENV=production
 
 COPY package*.json ./
 RUN npm ci --omit=dev && npm cache clean --force && \
-    npx playwright install chrome --with-deps
+    npx playwright install chromium --with-deps
 
 COPY --from=builder /app/dist ./dist
 
