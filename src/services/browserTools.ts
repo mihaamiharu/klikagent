@@ -6,11 +6,10 @@
  * agent can navigate, interact with, and snapshot a real browser during test
  * generation.
  *
- * Implementation: Approach B — raw playwright (already installed), because
- * @playwright/mcp only exposes a CLI binary and a `createConnection()` that
- * starts an MCP protocol server; bridging that into OpenAI function calling
- * would require a full MCP client transport layer. Using playwright directly
- * is simpler and avoids the round-trip overhead.
+ * Implementation: Direct Playwright API. This is simpler, faster, and more
+ * reliable than shelling out to @playwright/cli — no child process overhead,
+ * no fragile stdout parsing, and full access to the Playwright API for
+ * network interception, dialog handling, etc.
  *
  * Browser session lifecycle: a module-level session is maintained so the agent
  * can call tools sequentially (navigate → click → fill → snapshot) without
@@ -88,7 +87,54 @@ async function teardownSession(): Promise<void> {
   activeSession = null;
 }
 
-// ─── Snapshot helper (mirrors capturePageSnapshot in crawler.ts) ──────────────
+// ─── Structured error shaping ─────────────────────────────────────────────────
+
+interface ToolError {
+  error: string;
+  message: string;
+  hint?: string;
+}
+
+function shapeError(err: unknown, operation: string): string {
+  const message = err instanceof Error ? err.message : String(err);
+  const msg = message.toLowerCase();
+
+  if (msg.includes('timeout') || msg.includes('timed out')) {
+    const shaped: ToolError = {
+      error: 'TIMEOUT',
+      message,
+      hint: 'The element or page took too long. Call browser_snapshot() to check current state.',
+    };
+    return JSON.stringify(shaped);
+  }
+
+  if (msg.includes('not found') || msg.includes('no element') || msg.includes('strict mode violation')) {
+    const shaped: ToolError = {
+      error: 'LOCATOR_NOT_FOUND',
+      message,
+      hint: 'The locator did not match any element. Call browser_list_interactables() to see available elements.',
+    };
+    return JSON.stringify(shaped);
+  }
+
+  if (msg.includes('net::err_connection_refused') || msg.includes('connection refused')) {
+    const shaped: ToolError = {
+      error: 'CONNECTION_REFUSED',
+      message,
+      hint: `Cannot connect to the app. Is ${process.env.QA_BASE_URL ?? 'the QA app'} running?`,
+    };
+    return JSON.stringify(shaped);
+  }
+
+  const shaped: ToolError = {
+    error: 'BROWSER_ERROR',
+    message,
+    hint: `${operation} failed. Call browser_snapshot() to check current state.`,
+  };
+  return JSON.stringify(shaped);
+}
+
+// ─── Snapshot helper ──────────────────────────────────────────────────────────
 
 const INTERACTIVE_SELECTOR =
   'button, a[href], input, select, textarea, ' +
@@ -96,7 +142,13 @@ const INTERACTIVE_SELECTOR =
   '[role="tab"], [role="menuitem"], [role="option"], [role="combobox"], ' +
   '[role="textbox"], [role="switch"]';
 
-async function extractLocators(page: Page): Promise<string[]> {
+export interface InteractableElement {
+  role: string;
+  label: string;
+  selector: string;
+}
+
+async function extractInteractables(page: Page): Promise<InteractableElement[]> {
   return page.evaluate((selector: string) => {
     const TAG_TO_ROLE: Record<string, string> = {
       button: 'button',
@@ -125,42 +177,43 @@ async function extractLocators(page: Page): Promise<string[]> {
       return s.trim().replace(/'/g, "\\'").slice(0, 60);
     }
 
-    function bestLocator(el: Element): string | null {
-      const testId = el.getAttribute('data-testid');
-      if (testId) return `getByTestId('${safeName(testId)}')`;
-
+    function bestLocator(el: Element): { role: string; label: string; selector: string } | null {
       const role = getRole(el);
+
+      const testId = el.getAttribute('data-testid');
+      if (testId) return { role, label: testId, selector: `getByTestId('${safeName(testId)}')` };
+
       const ariaLabel = el.getAttribute('aria-label');
-      if (ariaLabel) return `getByRole('${role}', { name: '${safeName(ariaLabel)}' })`;
+      if (ariaLabel) return { role, label: ariaLabel, selector: `getByRole('${role}', { name: '${safeName(ariaLabel)}' })` };
 
       const id = el.getAttribute('id');
       if (id) {
-        const label = document.querySelector<HTMLElement>(`label[for="${id}"]`);
-        const labelText = label?.textContent?.trim();
-        if (labelText) return `getByLabel('${safeName(labelText)}')`;
+        const labelEl = document.querySelector<HTMLElement>(`label[for="${id}"]`);
+        const labelText = labelEl?.textContent?.trim();
+        if (labelText) return { role, label: labelText, selector: `getByLabel('${safeName(labelText)}')` };
       }
 
       const placeholder = (el as HTMLInputElement).placeholder;
-      if (placeholder) return `getByPlaceholder('${safeName(placeholder)}')`;
+      if (placeholder) return { role, label: placeholder, selector: `getByPlaceholder('${safeName(placeholder)}')` };
 
       const text = el.textContent?.trim();
       if (text && text.length <= 60 && (role === 'button' || role === 'link')) {
-        return `getByRole('${role}', { name: '${safeName(text)}' })`;
+        return { role, label: text, selector: `getByRole('${role}', { name: '${safeName(text)}' })` };
       }
 
       return null;
     }
 
     const seen = new Set<string>();
-    const locators: string[] = [];
+    const results: Array<{ role: string; label: string; selector: string }> = [];
     document.querySelectorAll(selector).forEach((el) => {
-      const locator = bestLocator(el);
-      if (locator && !seen.has(locator)) {
-        seen.add(locator);
-        locators.push(locator);
+      const result = bestLocator(el);
+      if (result && !seen.has(result.selector)) {
+        seen.add(result.selector);
+        results.push(result);
       }
     });
-    return locators;
+    return results;
   }, INTERACTIVE_SELECTOR);
 }
 
@@ -172,21 +225,15 @@ async function takeSnapshot(page: Page): Promise<string> {
   });
   await page.waitForTimeout(300);
 
-  const [ariaTree, testIds, locators, bodyHtml] = await Promise.all([
+  const [ariaTree, interactables] = await Promise.all([
     page.locator('body').ariaSnapshot({ mode: 'ai', timeout: 5_000 }).catch(() => ''),
-    page.$$eval('[data-testid]', (els) =>
-      els.map((el) => el.getAttribute('data-testid') ?? '').filter(Boolean)
-    ),
-    extractLocators(page),
-    page.$eval('body', (el) => el.outerHTML.slice(0, 500)).catch(() => ''),
+    extractInteractables(page),
   ]);
 
   return JSON.stringify({
     url: page.url(),
     ariaTree,
-    testIds,
-    locators,
-    htmlSample: bodyHtml,
+    interactables,
   });
 }
 
@@ -218,24 +265,31 @@ async function handleNavigate(args: Record<string, unknown>): Promise<string> {
     const loginUrl = `${baseUrl}/login`;
     log('INFO', `[BrowserTools] Authenticating as persona "${persona.name}" at ${loginUrl}`);
 
-    await page.goto(loginUrl, { waitUntil: 'networkidle', timeout: 30_000 });
+    try {
+      await page.goto(loginUrl, { waitUntil: 'networkidle', timeout: 30_000 });
 
-    const emailInput = page.locator('input[type="email"], input[name="email"]').first();
-    const passwordInput = page.locator('input[type="password"]').first();
+      const emailInput = page.locator('input[type="email"], input[name="email"]').first();
+      const passwordInput = page.locator('input[type="password"]').first();
 
-    if (await emailInput.isVisible({ timeout: 5_000 }).catch(() => false)) {
-      await emailInput.fill(persona.email);
-      await passwordInput.fill(persona.password);
-      await page.keyboard.press('Enter');
-      await page.waitForNavigation({ timeout: 10_000 }).catch(() => {});
-      log('INFO', `[BrowserTools] Login submitted`);
+      if (await emailInput.isVisible({ timeout: 5_000 }).catch(() => false)) {
+        await emailInput.fill(persona.email);
+        await passwordInput.fill(persona.password);
+        await page.keyboard.press('Enter');
+        await page.waitForNavigation({ timeout: 10_000 }).catch(() => {});
+        log('INFO', `[BrowserTools] Login submitted`);
+      }
+    } catch (err) {
+      log('WARN', `[BrowserTools] Authentication failed: ${err instanceof Error ? err.message : err}`);
     }
   }
 
   log('INFO', `[BrowserTools] Navigating to ${url}`);
-  await page.goto(url, { waitUntil: 'networkidle', timeout: 30_000 });
-
-  return await takeSnapshot(page);
+  try {
+    await page.goto(url, { waitUntil: 'networkidle', timeout: 30_000 });
+    return await takeSnapshot(page);
+  } catch (err) {
+    return shapeError(err, 'browser_navigate');
+  }
 }
 
 async function handleClick(args: Record<string, unknown>): Promise<string> {
@@ -246,13 +300,17 @@ async function handleClick(args: Record<string, unknown>): Promise<string> {
   const { page } = session;
 
   log('INFO', `[BrowserTools] Clicking: ${selector}`);
-  await page.locator(selector).first().click({ timeout: 10_000 });
+  try {
+    await page.locator(selector).first().click({ timeout: 10_000 });
 
-  // Wait for any navigation or network activity to settle
-  await page.waitForTimeout(500);
-  await page.waitForLoadState('networkidle').catch(() => {});
+    // Wait for any navigation or network activity to settle
+    await page.waitForTimeout(500);
+    await page.waitForLoadState('networkidle').catch(() => {});
 
-  return await takeSnapshot(page);
+    return await takeSnapshot(page);
+  } catch (err) {
+    return shapeError(err, 'browser_click');
+  }
 }
 
 async function handleFill(args: Record<string, unknown>): Promise<string> {
@@ -264,14 +322,30 @@ async function handleFill(args: Record<string, unknown>): Promise<string> {
   const { page } = session;
 
   log('INFO', `[BrowserTools] Filling "${selector}" with "${value}"`);
-  await page.locator(selector).first().fill(value, { timeout: 10_000 });
-
-  return JSON.stringify({ ok: true, url: page.url() });
+  try {
+    await page.locator(selector).first().fill(value, { timeout: 10_000 });
+    // Return a snapshot so the agent can see the result of the fill
+    return await takeSnapshot(page);
+  } catch (err) {
+    return shapeError(err, 'browser_fill');
+  }
 }
 
 async function handleSnapshot(_args: Record<string, unknown>): Promise<string> {
   const session = await getOrCreateSession();
   return await takeSnapshot(session.page);
+}
+
+async function handleListInteractables(_args: Record<string, unknown>): Promise<string> {
+  const session = await getOrCreateSession();
+  const { page } = session;
+
+  log('INFO', `[BrowserTools] Listing interactable elements`);
+  const interactables = await extractInteractables(page);
+  return JSON.stringify({
+    url: page.url(),
+    interactables,
+  });
 }
 
 async function handleClose(_args: Record<string, unknown>): Promise<string> {
@@ -290,8 +364,9 @@ export function buildBrowserTools(): AgentTool[] {
     function: {
       name: 'browser_navigate',
       description:
-        'Launch a headless browser, authenticate as the given persona, navigate to the URL, and return an ARIA snapshot of the page (ariaTree, testIds, locators, htmlSample). ' +
-        'Must be called first before any other browser tool. Returns PageSnapshot JSON.',
+        'Launch a headless browser, authenticate as the given persona, navigate to the URL, and return a page snapshot. ' +
+        'The snapshot includes an ARIA accessibility tree and a list of interactable elements with Playwright locators. ' +
+        'Must be called first before any other browser tool.',
       parameters: {
         type: 'object',
         properties: {
@@ -314,16 +389,16 @@ export function buildBrowserTools(): AgentTool[] {
     function: {
       name: 'browser_click',
       description:
-        'Click an element on the current page using a Playwright locator expression ' +
+        'Click an element on the current page using a Playwright locator from a previous snapshot\'s interactables list ' +
         '(e.g. getByRole("button", { name: "Submit" }) or getByTestId("submit-btn")). ' +
-        'Returns an updated ARIA snapshot after the click.',
+        'Returns an updated snapshot after the click.',
       parameters: {
         type: 'object',
         properties: {
           selector: {
             type: 'string',
             description:
-              'A Playwright locator string from a previous snapshot\'s locators array, e.g. "getByRole(\'button\', { name: \'Login\' })"',
+              'A Playwright locator string from a previous snapshot\'s interactables array, e.g. "getByRole(\'button\', { name: \'Login\' })"',
           },
         },
         required: ['selector'],
@@ -336,7 +411,7 @@ export function buildBrowserTools(): AgentTool[] {
       name: 'browser_fill',
       description:
         'Fill a form input on the current page. ' +
-        'Use a locator from the previous snapshot\'s locators array.',
+        'Use a locator from a previous snapshot\'s interactables list. Returns an updated snapshot.',
       parameters: {
         type: 'object',
         properties: {
@@ -360,8 +435,23 @@ export function buildBrowserTools(): AgentTool[] {
       name: 'browser_snapshot',
       description:
         'Capture the current page state without any interaction. ' +
-        'Returns PageSnapshot JSON with ariaTree, testIds, locators, and htmlSample. ' +
+        'Returns a snapshot with ARIA tree and interactable elements with Playwright locators. ' +
         'Use after any interaction to observe what changed on the page.',
+      parameters: {
+        type: 'object',
+        properties: {},
+        required: [],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'browser_list_interactables',
+      description:
+        'List all interactive elements on the current page with their roles, labels, and Playwright locators. ' +
+        'Use this to discover what elements are available before interacting with them. ' +
+        'Returns a list of { role, label, selector } objects.',
       parameters: {
         type: 'object',
         properties: {},
@@ -395,5 +485,6 @@ export const browserHandlers: ToolHandlers = {
   browser_click: handleClick,
   browser_fill: handleFill,
   browser_snapshot: handleSnapshot,
+  browser_list_interactables: handleListInteractables,
   browser_close: handleClose,
 };

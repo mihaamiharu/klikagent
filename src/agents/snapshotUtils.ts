@@ -6,10 +6,7 @@ export function serializeSnapshots(snapshots: PageSnapshot[]): string {
 **ARIA Tree:**
 ${s.ariaTree || '(empty)'}
 
-**Interactable Locators:**
-${s.locators.length ? s.locators.map((l) => `- ${l}`).join('\n') : '(none found)'}
-
-**data-testid attributes:**
-${s.testIds.length ? s.testIds.map((id) => `- ${id}`).join('\n') : '(none found)'}
+**Interactable Elements:**
+${s.interactables.length ? s.interactables.map((el) => `- [${el.role}] ${el.label} → ${el.selector}`).join('\n') : '(none found)'}
 `).join('\n---\n');
 }
