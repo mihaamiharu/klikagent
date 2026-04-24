@@ -115,7 +115,19 @@ curl -X POST http://localhost:3000/reviews \
     "branch": "qa/42-login-validation",
     "ticketId": "KA-42",
     "reviewId": 999,
-    "reviewerLogin": "qa-engineer"
+    "reviewerLogin": "qa-engineer",
+    "outputRepo": "owner/klikagent-tests"
+  }'
+
+# Repo provisioner — POST /repos/provision
+curl -X POST http://localhost:3000/repos/provision \
+  -H "Content-Type: application/json" \
+  -d '{
+    "repoName": "myteam-tests",
+    "owner": "your-org",
+    "qaEnvUrl": "https://qa.yourapp.com",
+    "features": ["auth", "billing", "dashboard"],
+    "domainContext": "A SaaS platform for managing invoices."
   }'
 ```
 
