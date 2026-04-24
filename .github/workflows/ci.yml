@@ -43,6 +43,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
           QA_ADMIN_EMAIL: ${{ secrets.QA_ADMIN_EMAIL }}
           QA_ADMIN_PASSWORD: ${{ secrets.QA_ADMIN_PASSWORD }}
+          DASHBOARD_PASSWORD: ${{ secrets.DASHBOARD_PASSWORD }}
           AI_BASE_URL: ${{ vars.AI_BASE_URL }}
           AI_MODEL: ${{ vars.AI_MODEL }}
           GH_OWNER: ${{ vars.GH_OWNER }}
@@ -54,7 +55,7 @@ jobs:
           host: 103.235.75.99
           username: deploy
           key: ${{ secrets.DEPLOY_SSH_KEY }}
-          envs: AI_API_KEY,GH_TOKEN,QA_ADMIN_EMAIL,QA_ADMIN_PASSWORD,AI_BASE_URL,AI_MODEL,GH_OWNER,GH_TEST_REPO,QA_ENV_URL,PORT,MAX_SELF_CORRECTION_ATTEMPTS
+          envs: AI_API_KEY,GH_TOKEN,QA_ADMIN_EMAIL,QA_ADMIN_PASSWORD,DASHBOARD_PASSWORD,AI_BASE_URL,AI_MODEL,GH_OWNER,GH_TEST_REPO,QA_ENV_URL,PORT,MAX_SELF_CORRECTION_ATTEMPTS
           script: |
             set -e
             DEPLOY_DIR=~/apps/klikagent
@@ -70,5 +71,6 @@ jobs:
             export QA_ENV_URL=$QA_ENV_URL
             export QA_ADMIN_EMAIL=$QA_ADMIN_EMAIL
             export QA_ADMIN_PASSWORD=$QA_ADMIN_PASSWORD
+            export DASHBOARD_PASSWORD=$DASHBOARD_PASSWORD
             docker compose up --build -d
             docker image prune -f
