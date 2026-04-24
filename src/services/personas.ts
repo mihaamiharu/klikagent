@@ -1,4 +1,4 @@
-import { getFileOnBranch, ownerName, testRepoName } from './github';
+import { getFileOnBranch } from './github';
 import { log } from '../utils/logger';
 
 export interface Persona {
@@ -8,26 +8,28 @@ export interface Persona {
 
 export type PersonaMap = Record<string, Persona>;
 
-// Process-lifetime cache for the raw personas config
-let cachedRawConfig: Record<string, Record<string, string>> | null = null;
+// Per-repo cache keyed by repoName
+const cache = new Map<string, Record<string, Record<string, string>>>();
 
-async function fetchRawConfig(): Promise<Record<string, Record<string, string>>> {
-  if (cachedRawConfig) return cachedRawConfig;
+async function fetchRawConfig(repoName: string): Promise<Record<string, Record<string, string>>> {
+  const cached = cache.get(repoName);
+  if (cached) return cached;
 
-  const content = await getFileOnBranch(testRepoName(), 'HEAD', 'config/personas.json');
+  const content = await getFileOnBranch(repoName, 'HEAD', 'config/personas.json');
   if (!content) {
     log('WARN', '[personas] config/personas.json not found in test repo — returning empty config');
-    cachedRawConfig = {};
-    return cachedRawConfig;
+    cache.set(repoName, {});
+    return {};
   }
 
   try {
-    cachedRawConfig = JSON.parse(content) as Record<string, Record<string, string>>;
-    return cachedRawConfig;
+    const parsed = JSON.parse(content) as Record<string, Record<string, string>>;
+    cache.set(repoName, parsed);
+    return parsed;
   } catch {
     log('WARN', '[personas] config/personas.json is invalid JSON — returning empty config');
-    cachedRawConfig = {};
-    return cachedRawConfig;
+    cache.set(repoName, {});
+    return {};
   }
 }
 
@@ -48,11 +50,11 @@ function resolveEnvPlaceholders(raw: Record<string, string>): Persona {
 }
 
 /**
- * Fetches personas.json from klikagent-tests repo and resolves ${VAR} placeholders.
+ * Fetches personas.json from the given repo and resolves ${VAR} placeholders.
  * If roles is empty, returns all personas from config.
  */
-export async function getPersonas(roles: string[]): Promise<PersonaMap> {
-  const rawConfig = await fetchRawConfig();
+export async function getPersonas(repoName: string, roles: string[]): Promise<PersonaMap> {
+  const rawConfig = await fetchRawConfig(repoName);
   const resolvedRoles = roles.length > 0 ? roles : Object.keys(rawConfig);
 
   const result: PersonaMap = {};
@@ -114,7 +116,7 @@ export function parsePersonasFromIssue(issueBody: string): string[] {
   return roles;
 }
 
-/** Clears the process-lifetime personas cache. Useful for testing. */
+/** Clears the personas cache for all repos. Useful for testing. */
 export function clearPersonasCache(): void {
-  cachedRawConfig = null;
+  cache.clear();
 }

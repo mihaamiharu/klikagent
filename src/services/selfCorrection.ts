@@ -2,11 +2,11 @@ import { QATask } from '../types';
 import { runQaAgent } from '../agents/qaAgent';
 import { runAgent, TokenUsage } from './ai';
 import { validateTypescriptHandler } from '../agents/tools/outputTools';
-import { qaTools, qaHandlers } from '../agents/tools';
+import { qaTools, createQaHandlers } from '../agents/tools';
 import { maxSelfCorrectionAttempts } from './testRepoClone';
 import { log } from '../utils/logger';
 import { dashboardBus } from '../dashboard/eventBus';
-import { AgentTool, ToolHandlers } from '../types';
+import { AgentTool } from '../types';
 
 export interface SelfCorrectionResult {
   feature: string;
@@ -43,7 +43,6 @@ const fixDoneTool: AgentTool = {
 };
 
 const fixTools: AgentTool[] = [...qaTools.filter((t) => t.function.name !== 'done'), fixDoneTool];
-const fixHandlers: ToolHandlers = { ...qaHandlers };
 
 export async function runWithSelfCorrection(
   task: QATask,
@@ -51,9 +50,11 @@ export async function runWithSelfCorrection(
 ): Promise<SelfCorrectionResult> {
   const maxAttempts = maxSelfCorrectionAttempts();
 
+  const repoName = task.outputRepo;
+
   // Step 1: Initial QA agent run
   log('INFO', '[selfCorrection] Running initial qaAgent pass');
-  const qaResult = await runQaAgent(task, branch);
+  const qaResult = await runQaAgent(task, branch, repoName);
   const feature = qaResult.feature;
   let specContent = qaResult.enrichedSpec;
   const poms = qaResult.poms;
@@ -84,7 +85,7 @@ export async function runWithSelfCorrection(
       'Fix the TypeScript errors in this Playwright spec. Output only the corrected spec content.',
       `TypeScript errors:\n${tsErrors}\n\nSpec:\n${specContent}`,
       fixTools,
-      fixHandlers,
+      createQaHandlers(repoName),
     );
     tokenUsage = addTokenUsage(tokenUsage, fixUsage);
     specContent = args.fixedSpec as string;

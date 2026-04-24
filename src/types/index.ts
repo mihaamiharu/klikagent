@@ -36,7 +36,8 @@ export interface ReviewComment {
 // Clean handoff object for the Review Agent
 export interface ReviewContext {
   prNumber: number;
-  repo: string;                   // e.g. "klikagent-tests"
+  repo: string;                   // e.g. "klikagent-tests" (kept for backwards compat)
+  outputRepo: string;             // repo to read/write — always use this for agent operations
   branch: string;                 // e.g. "qa/42-login-validation"
   ticketId: string;               // extracted from branch name
   reviewId: number;
@@ -103,3 +104,19 @@ export type ToolHandlers = Record<string, (args: Record<string, unknown>) => Pro
 
 export type QATaskHandler = (task: QATask) => Promise<void>;
 export type ReviewHandler = (context: ReviewContext) => Promise<void>;
+
+// ─── Repo Provisioner ─────────────────────────────────────────────────────────
+
+export interface ProvisionRequest {
+  repoName: string;       // GitHub repo name to create e.g. "myteam-tests"
+  owner: string;          // GitHub org or user
+  qaEnvUrl: string;       // base URL of the QA environment (seeded into playwright.config.ts)
+  features: string[];     // feature areas e.g. ["auth", "billing", "dashboard"]
+  domainContext: string;  // paragraph describing the app — seeded into context/domain.md
+}
+
+export interface ProvisionResult {
+  repoUrl: string;
+  cloneUrl: string;
+  defaultBranch: string;
+}

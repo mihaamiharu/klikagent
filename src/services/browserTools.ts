@@ -16,7 +16,7 @@
  * relaunching the browser on each call. Call `browser_close` to tear down.
  */
 
-import { chromium, Browser, BrowserContext, Page } from 'playwright';
+import { chromium, Browser, BrowserContext, Page, Locator } from 'playwright';
 import { AgentTool, ToolHandlers } from '../types';
 import { log } from '../utils/logger';
 
@@ -148,6 +148,24 @@ export interface InteractableElement {
   selector: string;
 }
 
+// Converts a selector string produced by extractInteractables (e.g. "getByLabel('Email')")
+// into an actual Playwright Locator. page.locator() only accepts CSS/XPath — not these strings.
+function locatorFromSelector(page: Page, selector: string): Locator {
+  const testId = selector.match(/^getByTestId\('(.+?)'\)$/);
+  if (testId) return page.getByTestId(testId[1]);
+
+  const label = selector.match(/^getByLabel\('(.+?)'\)$/);
+  if (label) return page.getByLabel(label[1]);
+
+  const placeholder = selector.match(/^getByPlaceholder\('(.+?)'\)$/);
+  if (placeholder) return page.getByPlaceholder(placeholder[1]);
+
+  const role = selector.match(/^getByRole\('(\w+)',\s*\{\s*name:\s*'(.+?)'\s*\}\)$/);
+  if (role) return page.getByRole(role[1] as Parameters<Page['getByRole']>[0], { name: role[2] });
+
+  return page.locator(selector);
+}
+
 async function extractInteractables(page: Page): Promise<InteractableElement[]> {
   return page.evaluate((selector: string) => {
     const TAG_TO_ROLE: Record<string, string> = {
@@ -268,15 +286,23 @@ async function handleNavigate(args: Record<string, unknown>): Promise<string> {
     try {
       await page.goto(loginUrl, { waitUntil: 'networkidle', timeout: 30_000 });
 
-      const emailInput = page.locator('input[type="email"], input[name="email"]').first();
-      const passwordInput = page.locator('input[type="password"]').first();
+      const interactables = await extractInteractables(page);
+      const emailField = interactables.find(
+        (el) => el.role === 'textbox' && /email|username/i.test(el.label),
+      );
+      const passwordField = interactables.find(
+        (el) => el.role === 'textbox' && /password|pass/i.test(el.label),
+      );
 
-      if (await emailInput.isVisible({ timeout: 5_000 }).catch(() => false)) {
-        await emailInput.fill(persona.email);
-        await passwordInput.fill(persona.password);
+      if (emailField && passwordField) {
+        log('INFO', `[BrowserTools] Using discovered auth fields: ${emailField.selector}, ${passwordField.selector}`);
+        await locatorFromSelector(page, emailField.selector).first().fill(persona.email);
+        await locatorFromSelector(page, passwordField.selector).first().fill(persona.password);
         await page.keyboard.press('Enter');
         await page.waitForNavigation({ timeout: 10_000 }).catch(() => {});
         log('INFO', `[BrowserTools] Login submitted`);
+      } else {
+        log('WARN', `[BrowserTools] Could not discover email/password fields in interactables — skipping auth`);
       }
     } catch (err) {
       log('WARN', `[BrowserTools] Authentication failed: ${err instanceof Error ? err.message : err}`);

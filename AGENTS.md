@@ -7,24 +7,27 @@ npm run dev      # nodemon + ts-node (auto-reload on changes)
 npm run build    # tsc → dist/
 npm start        # node dist/webhook/server.js
 npm test         # jest
+npm run test:watch  # jest --watch
 ```
 
-## Architecture
+## Server Endpoints (Actual)
 
-Node.js + Express TypeScript webhook listener. Only `/webhook/github` exists — the Phase 2 Jira webhook was removed.
+`src/webhook/server.ts` is the entry point — NOT `/webhook/github`.
 
-**Entry point:** `src/webhook/server.ts` → `parseGitHubPayload()` → `routeGitHubEvent()` → `orchestrator/`
+| Endpoint | Purpose |
+|---|---|
+| `POST /tasks` | Trigger QA spec generation (normalized QATask payload) |
+| `POST /reviews` | Trigger Review Agent on CHANGES_REQUESTED |
+| `POST /tasks/:id/results` | CI reports test results back |
+| `GET /health` | Health check |
 
-**Orchestrator (`src/orchestrator/index.ts`):**
-- `status:ready-for-qa` label → `generateQaSpecFlow()` (the only active flow)
-- `status:in-progress` label → no-op (Flow 1 skeleton generation removed)
-- Everything else → skip
+No HMAC signature validation — the server uses `express.json()`.
 
-The orchestrator delegates to `generateQaSpecFlow` which runs the self-correction loop (QA agent + validation) and commits spec + POM to a `qa/{ticketId}-{slug}` branch, opens a PR, transitions the issue to `status:in-qa`, and comments with token usage.
+## Orchestrator
+
+`src/orchestrator/index.ts` routes all tasks to `generateQaSpecFlow()`. There is only one active flow.
 
 ## Label Conventions
-
-These drive all routing — do not guess:
 
 | Label | Behaviour |
 |---|---|
@@ -36,9 +39,11 @@ These drive all routing — do not guess:
 | `parent:{ticketId}` | Parent ticket for rework subtasks |
 | `feature:*` | Feature detection for route resolution |
 
-## GitHub Webhook Raw Body
+## Branch / File Naming
 
-`src/webhook/server.ts` uses `express.raw({ type: '*/*' })` on `/webhook/github` because HMAC signature validation needs the raw (unparsed) body buffer. The body is parsed manually after validation. This is a common gotcha — do not switch to `express.json()` or signature validation will break.
+- Branch: `qa/{ticketId}-{slug}` — lowercase, hyphens, enforced by `MAX_SLUG_LENGTH=40` in `src/utils/naming.ts`
+- Spec path: `tests/web/{feature}/{ticketId}.spec.ts`
+- POM path: derived from `Page` class name inside POM content (`pomPathFromContent` in `src/agents/tools/outputTools.ts`)
 
 ## AI Service
 
@@ -47,12 +52,11 @@ Uses OpenAI SDK-compatible API (`src/services/ai.ts`):
 ```env
 AI_API_KEY=...
 AI_BASE_URL=https://api.minimax.io/v1
-AI_MODEL=MiniMax-M2.7          # default model
+AI_MODEL=MiniMax-M2.7
 ```
 
 - Retry with exponential backoff on 429/503/529
-- Tool cache: duplicate calls within same run return `[ALREADY FETCHED]` to avoid re-inflating context
-- `done()` and `validate_typescript` are never cached
+- Tool cache: duplicate calls within same run return `[ALREADY FETCHED]` — `done()` and `validate_typescript` are never cached
 - Max iterations default: 20
 
 ## Self-Correction Loop
@@ -61,76 +65,77 @@ AI_MODEL=MiniMax-M2.7          # default model
 
 ## Crawler — PageSnapshot Format
 
-The crawler (`src/services/crawler.ts`) uses Playwright's `ariaSnapshot({ mode: 'ai' })` (v1.48+) which returns a YAML string, not a JSON object. The `PageSnapshot` interface reflects this:
-- `ariaTree: string` — YAML snapshot (not an object)
+`src/services/crawler.ts` (if it exists) uses Playwright's `ariaSnapshot({ mode: 'ai' })` (v1.48+) which returns a YAML string, not a JSON object:
+- `ariaTree: string` — YAML snapshot
 - `testIds: string[]` — raw data-testid attribute values
 - `locators: string[]` — pre-computed Playwright locators
 
 ## Test Repo Access
 
-`src/services/testRepo.ts` reads from `klikagent-tests` repo via GitHub API. It also clones the repo locally (using `KLIKAGENT_TESTS_LOCAL_PATH=/opt/klikagent-tests` if set) for keyword map and context docs. If both fail, it falls back gracefully.
+`src/services/testRepo.ts` reads from `klikagent-tests` repo via GitHub API. It also clones the repo locally (using `KLIKAGENT_TESTS_LOCAL_PATH=/opt/klikagent-tests` if set) for keyword map and context docs. Falls back gracefully if both fail.
 
-## Branch / File Naming
+## What Was Removed
 
-- Branch: `qa/{ticketId}-{slug}` — lowercase, hyphens, max 50 chars (function `toBranchSlug` in `src/utils/naming.ts`)
-- Spec path: `tests/web/{feature}/{ticketId}.spec.ts`
-- POM path: derived from `Page` class name inside the POM content (`pomPathFromContent` in `src/agents/tools/outputTools.ts`)
-
-## What Was Removed from Phase 2 Spec
-
-The Phase 2 spec described Jira webhooks, `src/webhook/jira/`, and `src/flows/`. All of that was deleted:
-- No `/webhook/jira` route
-- No `src/webhook/jira/` directory
+- No `/webhook/github` endpoint (server uses `/tasks`, `/reviews` instead)
+- No `/webhook/jira` endpoint
+- No `src/webhook/github/` directory (no `parser.ts`, `router.ts`, `validator.ts`)
 - No `src/flows/` directory
-- Jira variables (`JIRA_WEBHOOK_SECRET`, etc.) are not in `.env.example`
+- No HMAC signature validation
+- No `skeletonAgent.ts` — `scripts/testSkeleton.ts` and `scripts/testEnrichment.ts` reference a non-existent file
 
-## Dependencies to Know
+## Dependencies
 
 - `openai` — AI service client
-- `playwright` — crawler (also available as `@playwright/mcp`)
+- `playwright` — crawler
 - `express` — webhook server
-- `dotenv` — env loading (loaded at top of `server.ts`)
+- `dotenv` — env loading
 - `ts-node` — dev-time execution
 - `jest` + `ts-jest` — testing
 
 ## Testing a Webhook Locally
 
 ```bash
-# GitHub issues labeled — Flow 2 (generateQaSpecFlow)
-curl -X POST http://localhost:3000/webhook/github \
+# QA spec generation — POST /tasks (not /webhook/github)
+curl -X POST http://localhost:3000/tasks \
   -H "Content-Type: application/json" \
-  -H "x-github-event: issues" \
   -d '{
-    "action": "labeled",
-    "label": { "name": "status:ready-for-qa" },
-    "issue": {
-      "number": 42,
-      "title": "Login form validation",
-      "body": "## Acceptance Criteria\nGiven a user When they submit invalid credentials Then they see an error message",
-      "html_url": "https://github.com/owner/repo/issues/42",
-      "labels": [{ "name": "status:ready-for-qa" }, { "name": "scope:web" }]
-    },
-    "repository": { "name": "klikagent-tests", "full_name": "owner/klikagent-tests" }
+    "taskId": "KA-42",
+    "title": "Login form validation",
+    "description": "## Acceptance Criteria\nGiven a user When they submit invalid credentials Then they see an error message",
+    "qaEnvUrl": "https://your-qa-environment.com",
+    "outputRepo": "owner/klikagent-tests",
+    "labels": ["status:ready-for-qa", "scope:web"]
   }'
 
-# PR review CHANGES_REQUESTED — Review Agent
-curl -X POST http://localhost:3000/webhook/github \
+# Review Agent — POST /reviews
+curl -X POST http://localhost:3000/reviews \
   -H "Content-Type: application/json" \
-  -H "x-github-event: pull_request_review" \
   -d '{
-    "action": "submitted",
-    "review": { "id": 999, "state": "CHANGES_REQUESTED", "body": "Tests need more coverage", "user": { "login": "qa-engineer" } },
-    "pull_request": { "number": 14, "draft": false, "head": { "ref": "qa/42-login-validation" } },
-    "repository": { "name": "klikagent-tests", "full_name": "owner/klikagent-tests" }
+    "prNumber": 14,
+    "branch": "qa/42-login-validation",
+    "ticketId": "KA-42",
+    "reviewId": 999,
+    "reviewerLogin": "qa-engineer",
+    "outputRepo": "owner/klikagent-tests"
+  }'
+
+# Repo provisioner — POST /repos/provision
+curl -X POST http://localhost:3000/repos/provision \
+  -H "Content-Type: application/json" \
+  -d '{
+    "repoName": "myteam-tests",
+    "owner": "your-org",
+    "qaEnvUrl": "https://qa.yourapp.com",
+    "features": ["auth", "billing", "dashboard"],
+    "domainContext": "A SaaS platform for managing invoices."
   }'
 ```
 
 ## Test Commands
 
 ```bash
-npm test                    # all tests
-npm test -- --watch        # watch mode
-npm run build              # TypeScript compile check
+npm test           # all tests
+npm run build      # TypeScript compile check
 ```
 
 ## Phase Docs
@@ -139,3 +144,4 @@ The full requirements and plan are in:
 - `klikagent-phase3-requirements.md` — detailed spec
 - `klikagent-phase3-plan.md` — implementation plan with branch strategy
 - `klikagent-phase2-spec.md` — Phase 2 spec (historical, parts are deleted)
+- `OVERVIEW.md` — repository overview (some file references may be stale)
