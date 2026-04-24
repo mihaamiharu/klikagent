@@ -44,6 +44,17 @@ On locator failure: tool returns error JSON with a hint. Call browser_snapshot()
 - Import POM classes only when you are the one creating that POM in this task, or when it appears in list_available_poms. NEVER import a POM that does not exist.
 - The pomPath field must be the repo-relative path matching the exported class name exactly e.g. "pages/auth/AuthPage.ts"
 - The affectedPaths field should list test folders impacted by this task
+- CRITICAL — POM method usage: AFTER writing your POM, you MUST use its methods in the spec. Do NOT re-select elements with page.getByTestId() or page.locator() when a POM property or method exists. For example:
+  - Use authPage.emailInput.fill(email) NOT page.getByTestId('email-input').fill(email)
+  - Use authPage.login(email, password) NOT a chain of fill() + click() calls
+  - Use authPage.expectLoginSuccess() NOT a manual expect block
+- If you define a method in your POM (e.g. login(), fillLoginForm(), submitLogin(), expectOnLoginPage()), you MUST call it in your tests. Unused POM methods indicate the POM was not properly integrated.
+
+## Tagging and reporting
+- Add Playwright tags to every test using the format: test(..., { tag: ['@tag1', '@tag2'] })
+- Minimum tags: feature tag (e.g. @auth, @dashboard) + test type (choose from @smoke, @regression, @full)
+- Tag the describe block: test.describe('Group | Subgroup', { tag: '...' })
+- Consider using allure for enhanced reporting: allure.feature(), allure.story(), allure.severity(), allure.step()
 
 ## POM rules
 - POM file goes in: pages/{feature}/{ClassName}.ts  where {feature} is given explicitly in your task
@@ -114,8 +125,10 @@ Start here: ${task.qaEnvUrl}
 7. Call browser_snapshot() after each interaction to capture real locators
 8. Call browser_close() when exploration is complete
 9. Write the full Playwright spec using ONLY locators from your snapshots
-   - Import from fixtures: import { test, expect } from '../../../fixtures';
-   - Use fixture parameters for any POM already registered in fixtures/index.ts
+    - Import from fixtures: import { test, expect } from '../../../fixtures';
+    - Use fixture parameters for any POM already registered in fixtures/index.ts
+    - CRITICAL: Use POM methods/properties instead of re-selecting elements (e.g. authPage.login() not page.getByTestId().fill())
+    - Add tags to every test: test(..., { tag: ['@smoke', '@auth'] }) and describe block
 10. Write or update POM(s) at pages/<your-determined-feature>/ — each POM needs a matching pomPath. Put all POMs in the poms array.
 11. Call validate_typescript with your spec — if errors are returned, fix them and re-validate. If valid, proceed to step 12.
 12. Call done() with feature (your determined feature name), enrichedSpec, poms, and affectedPaths.
