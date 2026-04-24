@@ -15,5 +15,7 @@ services:
       - QA_ENV_URL
       - QA_ADMIN_EMAIL
       - QA_ADMIN_PASSWORD
+      - DASHBOARD_PASSWORD
+      - DASHBOARD_PERSIST
       - PORT
       - MAX_SELF_CORRECTION_ATTEMPTS
