@@ -268,15 +268,23 @@ async function handleNavigate(args: Record<string, unknown>): Promise<string> {
     try {
       await page.goto(loginUrl, { waitUntil: 'networkidle', timeout: 30_000 });
 
-      const emailInput = page.locator('input[type="email"], input[name="email"]').first();
-      const passwordInput = page.locator('input[type="password"]').first();
+      const interactables = await extractInteractables(page);
+      const emailField = interactables.find(
+        (el) => el.role === 'textbox' && /email|login|username|user/i.test(el.label),
+      );
+      const passwordField = interactables.find(
+        (el) => el.role === 'textbox' && /password|pass/i.test(el.label),
+      );
 
-      if (await emailInput.isVisible({ timeout: 5_000 }).catch(() => false)) {
-        await emailInput.fill(persona.email);
-        await passwordInput.fill(persona.password);
+      if (emailField && passwordField) {
+        log('INFO', `[BrowserTools] Using discovered auth fields: ${emailField.selector}, ${passwordField.selector}`);
+        await page.locator(emailField.selector).first().fill(persona.email);
+        await page.locator(passwordField.selector).first().fill(persona.password);
         await page.keyboard.press('Enter');
         await page.waitForNavigation({ timeout: 10_000 }).catch(() => {});
         log('INFO', `[BrowserTools] Login submitted`);
+      } else {
+        log('WARN', `[BrowserTools] Could not discover email/password fields in interactables — skipping auth`);
       }
     } catch (err) {
       log('WARN', `[BrowserTools] Authentication failed: ${err instanceof Error ? err.message : err}`);

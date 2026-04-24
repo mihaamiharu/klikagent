@@ -8,12 +8,12 @@ jest.mock('./github', () => ({
   ghRequest:       jest.fn(),
   commitFile:      jest.fn(),
   ownerName:       jest.fn().mockReturnValue('owner'),
-  testRepoName:    jest.fn().mockReturnValue('test-repo'),
 }));
 jest.mock('../utils/logger', () => ({ log: jest.fn() }));
 
 const mockGetFile = github.getFileOnBranch as jest.MockedFunction<typeof github.getFileOnBranch>;
 
+const REPO = 'test-repo';
 const ROUTES_TS = `export default {\n  auth: '/login',\n  doctors: '/doctors',\n  patients: '/patients'\n};`;
 
 // ─── getKeywordMap ────────────────────────────────────────────────────────────
@@ -27,7 +27,7 @@ describe('getKeywordMap', () => {
       path === 'config/keywords.json' ? JSON.stringify(keywords) : null,
     );
 
-    const result = await getKeywordMap();
+    const result = await getKeywordMap(REPO);
 
     expect(result).toEqual(keywords);
   });
@@ -39,7 +39,7 @@ describe('getKeywordMap', () => {
       return null;
     });
 
-    const result = await getKeywordMap();
+    const result = await getKeywordMap(REPO);
 
     expect(result).toEqual({ auth: ['auth'], doctors: ['doctors'], patients: ['patients'] });
   });
@@ -51,7 +51,7 @@ describe('getKeywordMap', () => {
       return null;
     });
 
-    const result = await getKeywordMap();
+    const result = await getKeywordMap(REPO);
 
     expect(result).toEqual({ auth: ['auth'], doctors: ['doctors'], patients: ['patients'] });
   });
@@ -59,7 +59,7 @@ describe('getKeywordMap', () => {
   it('returns empty object when both keywords.json and routes.ts are missing', async () => {
     mockGetFile.mockResolvedValue(null);
 
-    const result = await getKeywordMap();
+    const result = await getKeywordMap(REPO);
 
     expect(result).toEqual({});
   });
@@ -72,7 +72,7 @@ describe('getKeywordMap', () => {
       return null;
     });
 
-    await getKeywordMap();
+    await getKeywordMap(REPO);
 
     expect(log).toHaveBeenCalledWith('WARN', expect.stringContaining('keywords.json'));
   });

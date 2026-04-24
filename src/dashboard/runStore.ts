@@ -7,7 +7,7 @@ import { log } from '../utils/logger';
 export interface Run {
   id: string;
   taskId: string;
-  type: 'qa-spec' | 'review' | 'result';
+  type: 'qa-spec' | 'review' | 'result' | 'provision';
   status: 'running' | 'success' | 'failed' | 'warned';
   title: string;
   startedAt: string;

@@ -1,4 +1,4 @@
-import { qaTools, qaHandlers } from './index';
+import { qaTools, createQaHandlers } from './index';
 
 describe('qaTools', () => {
   const toolNames = qaTools.map((t) => t.function.name);
@@ -33,7 +33,9 @@ describe('qaTools', () => {
   });
 });
 
-describe('qaHandlers', () => {
+describe('createQaHandlers', () => {
+  const qaHandlers = createQaHandlers('test-repo');
+
   it('has handlers for all browser tools', () => {
     expect(qaHandlers).toHaveProperty('browser_navigate');
     expect(qaHandlers).toHaveProperty('browser_click');

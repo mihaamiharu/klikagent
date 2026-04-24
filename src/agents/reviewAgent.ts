@@ -1,6 +1,6 @@
 import { ReviewContext } from '../types';
 import { runAgent, TokenUsage } from '../services/ai';
-import { reviewTools, reviewHandlers } from './tools';
+import { reviewTools, createReviewHandlers } from './tools';
 
 const SYSTEM_PROMPT = `You are a senior QA engineer responding to code review feedback on a Playwright test PR.
 
@@ -53,7 +53,8 @@ ${comments}
 
 export async function runReviewAgent(
   ctx: ReviewContext,
-  feature: string | undefined
+  feature: string | undefined,
+  repoName: string,
 ): Promise<{
   fixedSpec: string;
   pomContent: string;
@@ -64,7 +65,7 @@ export async function runReviewAgent(
     SYSTEM_PROMPT,
     buildUserMessage(ctx, feature),
     reviewTools,
-    reviewHandlers
+    createReviewHandlers(repoName),
   );
   return {
     fixedSpec: args.fixedSpec as string,

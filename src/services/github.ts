@@ -15,12 +15,6 @@ export function mainRepo(): string {
   return r;
 }
 
-export function testRepoName(): string {
-  const r = process.env.GITHUB_TEST_REPO;
-  if (!r) throw new Error('GITHUB_TEST_REPO env var is not set');
-  return r;
-}
-
 function token(): string {
   const t = process.env.GITHUB_TOKEN;
   if (!t) throw new Error('GITHUB_TOKEN env var is not set');
@@ -233,5 +227,22 @@ export async function triggerWorkflow(
   );
   if (!res.ok) throw new Error(`triggerWorkflow ${workflow}: ${res.status} ${await res.text()}`);
   log('INFO', `Dispatched ${workflow} on ${ref} with inputs: ${JSON.stringify(inputs)}`);
+}
+
+// ─── Repo provisioning ────────────────────────────────────────────────────────
+
+export async function createRepo(
+  owner: string,
+  repoName: string,
+): Promise<{ htmlUrl: string; cloneUrl: string; defaultBranch: string }> {
+  const res = await ghRequest(`/orgs/${owner}/repos`, 'POST', {
+    name: repoName,
+    private: true,
+    auto_init: true,
+  });
+  if (!res.ok) throw new Error(`createRepo ${owner}/${repoName}: ${res.status} ${await res.text()}`);
+  const data = await res.json() as { html_url: string; clone_url: string; default_branch: string };
+  log('INFO', `Repo created: ${data.html_url}`);
+  return { htmlUrl: data.html_url, cloneUrl: data.clone_url, defaultBranch: data.default_branch };
 }
 

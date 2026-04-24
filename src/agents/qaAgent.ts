@@ -1,6 +1,6 @@
 import { QATask } from '../types';
 import { runAgent, TokenUsage } from '../services/ai';
-import { qaTools, qaHandlers } from './tools';
+import { qaTools, createQaHandlers } from './tools';
 
 const SYSTEM_PROMPT = `You are a senior QA engineer who writes complete Playwright TypeScript test specs and Page Object Models (POMs).
 
@@ -138,12 +138,13 @@ Start here: ${task.qaEnvUrl}
 export async function runQaAgent(
   task: QATask,
   branch: string,
+  repoName: string,
 ): Promise<{ feature: string; enrichedSpec: string; poms: Array<{ pomContent: string; pomPath: string }>; affectedPaths: string; tokenUsage: TokenUsage }> {
   const { args, tokenUsage } = await runAgent(
     SYSTEM_PROMPT,
     buildUserMessage(task, branch),
     qaTools,
-    qaHandlers,
+    createQaHandlers(repoName),
   );
   return {
     feature: args.feature as string,

@@ -36,11 +36,11 @@ jest.mock('../agents/tools/outputTools', () => ({
 
 jest.mock('../agents/tools', () => ({
   qaTools: [],
-  qaHandlers: {},
+  createQaHandlers: jest.fn().mockReturnValue({}),
   browserTools: [],
   browserHandlers: {},
   reviewTools: [],
-  reviewHandlers: {},
+  createReviewHandlers: jest.fn().mockReturnValue({}),
 }));
 
 jest.mock('./ai', () => ({

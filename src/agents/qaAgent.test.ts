@@ -46,7 +46,7 @@ describe('runQaAgent', () => {
   it('returns enrichedSpec, poms, affectedPaths, tokenUsage from agent', async () => {
     runAgent.mockResolvedValueOnce(makeAgentResult());
 
-    const result = await runQaAgent(makeTask(), 'qa/21-doctor-reviews');
+    const result = await runQaAgent(makeTask(), 'qa/21-doctor-reviews', 'klikagent-tests');
 
     expect(result.enrichedSpec).toBe('test("reviews", async () => {});');
     expect(result.poms[0].pomContent).toBe('export class ReviewsPage {}');
@@ -58,7 +58,7 @@ describe('runQaAgent', () => {
   it('calls runAgent with qaTools and qaHandlers', async () => {
     runAgent.mockResolvedValueOnce(makeAgentResult());
 
-    await runQaAgent(makeTask(), 'qa/21');
+    await runQaAgent(makeTask(), 'qa/21', 'klikagent-tests');
 
     expect(runAgent).toHaveBeenCalledTimes(1);
     const [, , tools, handlers] = runAgent.mock.calls[0];
@@ -75,7 +75,7 @@ describe('runQaAgent', () => {
   it('includes taskId, title, description, and qaEnvUrl in the user message', async () => {
     runAgent.mockResolvedValueOnce(makeAgentResult());
 
-    await runQaAgent(makeTask(), 'qa/21');
+    await runQaAgent(makeTask(), 'qa/21', 'klikagent-tests');
 
     const userMessage = runAgent.mock.calls[0][1] as string;
     expect(userMessage).toContain('21');
@@ -87,7 +87,7 @@ describe('runQaAgent', () => {
   it('includes the branch in the user message', async () => {
     runAgent.mockResolvedValueOnce(makeAgentResult());
 
-    await runQaAgent(makeTask(), 'qa/21-doctor-reviews');
+    await runQaAgent(makeTask(), 'qa/21-doctor-reviews', 'klikagent-tests');
 
     const userMessage = runAgent.mock.calls[0][1] as string;
     expect(userMessage).toContain('qa/21-doctor-reviews');
@@ -97,7 +97,7 @@ describe('runQaAgent', () => {
     runAgent.mockRejectedValueOnce(new Error('AI timeout'));
 
     await expect(
-      runQaAgent(makeTask(), 'qa/21'),
+      runQaAgent(makeTask(), 'qa/21', 'klikagent-tests'),
     ).rejects.toThrow('AI timeout');
   });
 });

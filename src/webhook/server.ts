@@ -1,8 +1,9 @@
 import 'dotenv/config';
 import express, { Request, Response } from 'express';
-import { QATask, TaskResult, ReviewContext } from '../types';
+import { QATask, TaskResult, ReviewContext, ProvisionRequest } from '../types';
 import { orchestrate } from '../orchestrator';
 import { runReviewAgent } from '../agents/reviewAgent';
+import { provisionRepo } from '../services/repoProvisioner';
 import { log } from '../utils/logger';
 import { dashboardRoutes } from '../dashboard/routes';
 import { runStore } from '../dashboard/runStore';
@@ -44,12 +45,23 @@ app.post('/tasks', (req: Request, res: Response) => {
 // Responds immediately and processes asynchronously.
 
 app.post('/reviews', (req: Request, res: Response) => {
-  const ctx = req.body as ReviewContext;
+  const body = req.body as Partial<ReviewContext>;
 
-  if (!ctx.prNumber || !ctx.branch || !ctx.ticketId || !ctx.reviewId || !ctx.reviewerLogin) {
-    res.status(400).json({ error: 'Missing required fields: prNumber, branch, ticketId, reviewId, reviewerLogin' });
+  if (!body.prNumber || !body.branch || !body.ticketId || !body.reviewId || !body.reviewerLogin || !body.outputRepo) {
+    res.status(400).json({ error: 'Missing required fields: prNumber, branch, ticketId, reviewId, reviewerLogin, outputRepo' });
     return;
   }
+
+  const ctx: ReviewContext = {
+    prNumber: body.prNumber,
+    repo: body.outputRepo,
+    outputRepo: body.outputRepo,
+    branch: body.branch,
+    ticketId: body.ticketId,
+    reviewId: body.reviewId,
+    reviewerLogin: body.reviewerLogin,
+    comments: body.comments ?? [],
+  };
 
   log('INFO', `POST /reviews — pr=#${ctx.prNumber} branch="${ctx.branch}" reviewer=${ctx.reviewerLogin}`);
   res.status(202).json({ received: true, prNumber: ctx.prNumber });
@@ -62,10 +74,37 @@ app.post('/reviews', (req: Request, res: Response) => {
   const runId = `pr-${ctx.prNumber}`;
   runStore.startRun(runId, ctx.ticketId, `Review PR #${ctx.prNumber}`, 'review');
   dashboardBus.withRunId(runId, () => {
-    runReviewAgent(ctx, feature).then(() => {
+    runReviewAgent(ctx, feature, ctx.outputRepo).then(() => {
       runStore.endRun(runId, 'success');
     }).catch((err: Error) => {
       log('ERROR', `[reviews] Unhandled error for PR #${ctx.prNumber}: ${err.message}`);
+      runStore.endRun(runId, 'failed');
+    });
+  });
+});
+
+// ─── POST /repos/provision ────────────────────────────────────────────────────
+// Creates a new convention-compliant test repo for a team.
+// Responds immediately and provisions asynchronously.
+
+app.post('/repos/provision', (req: Request, res: Response) => {
+  const payload = req.body as ProvisionRequest;
+
+  if (!payload.repoName || !payload.owner || !payload.qaEnvUrl || !payload.features || !payload.domainContext) {
+    res.status(400).json({ error: 'Missing required fields: repoName, owner, qaEnvUrl, features, domainContext' });
+    return;
+  }
+
+  log('INFO', `POST /repos/provision — repo=${payload.owner}/${payload.repoName}`);
+  res.status(202).json({ received: true, repoName: payload.repoName });
+
+  const runId = `provision-${payload.repoName}`;
+  runStore.startRun(runId, payload.repoName, `Provision repo ${payload.repoName}`, 'provision');
+  dashboardBus.withRunId(runId, () => {
+    provisionRepo(payload).then(() => {
+      runStore.endRun(runId, 'success');
+    }).catch((err: Error) => {
+      log('ERROR', `[provision] Unhandled error for ${payload.repoName}: ${err.message}`);
       runStore.endRun(runId, 'failed');
     });
   });

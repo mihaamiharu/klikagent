@@ -1,5 +1,5 @@
 import { AgentTool, ToolHandlers } from '../../types';
-import { getReviewComments, ownerName, testRepoName } from '../../services/github';
+import { getReviewComments } from '../../services/github';
 
 export const githubToolDefs: AgentTool[] = [
   {
@@ -19,15 +19,17 @@ export const githubToolDefs: AgentTool[] = [
   },
 ];
 
-export const githubToolHandlers: ToolHandlers = {
-  get_full_review_comments: async (args) => {
-    const comments = await getReviewComments(
-      args.prNumber as number,
-      args.reviewId as number,
-      testRepoName()
-    );
-    return comments
-      .map((c) => `[id:${c.id}] ${c.path}:${c.line ?? '?'}\n${c.body}\n\nDiff:\n${c.diffHunk}`)
-      .join('\n\n---\n\n');
-  },
-};
+export function createGithubToolHandlers(repoName: string): ToolHandlers {
+  return {
+    get_full_review_comments: async (args) => {
+      const comments = await getReviewComments(
+        args.prNumber as number,
+        args.reviewId as number,
+        repoName,
+      );
+      return comments
+        .map((c) => `[id:${c.id}] ${c.path}:${c.line ?? '?'}\n${c.body}\n\nDiff:\n${c.diffHunk}`)
+        .join('\n\n---\n\n');
+    },
+  };
+}
