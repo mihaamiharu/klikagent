@@ -5,6 +5,7 @@ import { validateTypescriptHandler } from '../agents/tools/outputTools';
 import { qaTools, qaHandlers } from '../agents/tools';
 import { maxSelfCorrectionAttempts } from './testRepoClone';
 import { log } from '../utils/logger';
+import { dashboardBus } from '../dashboard/eventBus';
 import { AgentTool, ToolHandlers } from '../types';
 
 export interface SelfCorrectionResult {
@@ -61,6 +62,7 @@ export async function runWithSelfCorrection(
 
   // Step 2: TypeScript validation loop — up to maxAttempts corrections
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    dashboardBus.emitEvent('validation', 'info', `TypeScript validation check (attempt ${attempt})`, { attempt });
     const tsResultRaw = await validateTypescriptHandler.validate_typescript({ code: specContent });
     const tsResult = JSON.parse(
       typeof tsResultRaw === 'string' ? tsResultRaw : JSON.stringify(tsResultRaw)
@@ -68,10 +70,12 @@ export async function runWithSelfCorrection(
 
     if (tsResult.valid) {
       log('INFO', `[selfCorrection] TypeScript valid${attempt > 1 ? ` after ${attempt - 1} correction(s)` : ''}`);
+      dashboardBus.emitEvent('validation', 'info', 'TypeScript is valid', { valid: true });
       return { feature, specContent, poms, affectedPaths, tokenUsage, warned: false };
     }
 
     log('WARN', `[selfCorrection] TypeScript errors on attempt ${attempt}/${maxAttempts}: ${JSON.stringify(tsResult.errors)}`);
+    dashboardBus.emitEvent('validation', 'warn', 'TypeScript errors found', { errors: tsResult.errors });
 
     if (attempt === maxAttempts) break;
 
@@ -85,6 +89,7 @@ export async function runWithSelfCorrection(
     tokenUsage = addTokenUsage(tokenUsage, fixUsage);
     specContent = args.fixedSpec as string;
     log('INFO', `[selfCorrection] Applied TypeScript correction ${attempt}`);
+    dashboardBus.emitEvent('correction', 'info', `Applied correction ${attempt}`, { tokenUsage: fixUsage });
   }
 
   // Final validation after last correction

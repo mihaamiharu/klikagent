@@ -4,9 +4,14 @@ import { QATask, TaskResult, ReviewContext } from '../types';
 import { orchestrate } from '../orchestrator';
 import { runReviewAgent } from '../agents/reviewAgent';
 import { log } from '../utils/logger';
+import { dashboardRoutes } from '../dashboard/routes';
+import { runStore } from '../dashboard/runStore';
+
+import { dashboardBus } from '../dashboard/eventBus';
 
 const app = express();
 app.use(express.json());
+app.use('/', dashboardRoutes);
 
 // ─── POST /tasks ──────────────────────────────────────────────────────────────
 // Trigger services call this endpoint with a normalized QATask payload.
@@ -23,8 +28,14 @@ app.post('/tasks', (req: Request, res: Response) => {
   log('INFO', `POST /tasks — task=${task.taskId} title="${task.title}"`);
   res.status(202).json({ received: true, taskId: task.taskId });
 
-  orchestrate(task).catch((err: Error) => {
-    log('ERROR', `[tasks] Unhandled error for task ${task.taskId}: ${err.message}`);
+  runStore.startRun(task.taskId, task.taskId, task.title, 'qa-spec');
+  dashboardBus.withRunId(task.taskId, () => {
+    orchestrate(task).then(() => {
+      runStore.endRun(task.taskId, 'success');
+    }).catch((err: Error) => {
+      log('ERROR', `[tasks] Unhandled error for task ${task.taskId}: ${err.message}`);
+      runStore.endRun(task.taskId, 'failed');
+    });
   });
 });
 
@@ -48,8 +59,15 @@ app.post('/reviews', (req: Request, res: Response) => {
   const featureMatch = ctx.branch.match(/^qa\/\d+-([^-]+)/);
   const feature = featureMatch ? featureMatch[1] : undefined;
 
-  runReviewAgent(ctx, feature).catch((err: Error) => {
-    log('ERROR', `[reviews] Unhandled error for PR #${ctx.prNumber}: ${err.message}`);
+  const runId = `pr-${ctx.prNumber}`;
+  runStore.startRun(runId, ctx.ticketId, `Review PR #${ctx.prNumber}`, 'review');
+  dashboardBus.withRunId(runId, () => {
+    runReviewAgent(ctx, feature).then(() => {
+      runStore.endRun(runId, 'success');
+    }).catch((err: Error) => {
+      log('ERROR', `[reviews] Unhandled error for PR #${ctx.prNumber}: ${err.message}`);
+      runStore.endRun(runId, 'failed');
+    });
   });
 });
 

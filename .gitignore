@@ -25,3 +25,6 @@ Thumbs.db
 
 # TypeScript cache
 *.tsbuildinfo
+
+# Dashboard Data
+data/

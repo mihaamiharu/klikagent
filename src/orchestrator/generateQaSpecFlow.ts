@@ -8,6 +8,7 @@ import {
   commitFile,
 } from '../services/github';
 import { toSpecFileName, toBranchSlug } from '../utils/naming';
+import { dashboardBus } from '../dashboard/eventBus';
 
 export async function generateQaSpecFlow(task: QATask): Promise<void> {
   log('INFO', `[generateQaSpecFlow] Starting for task ${task.taskId}${task.feature ? ` feature-hint=${task.feature}` : ''}`);
@@ -17,6 +18,7 @@ export async function generateQaSpecFlow(task: QATask): Promise<void> {
   const baseSha = await getDefaultBranchSha(task.outputRepo);
   await createBranch(task.outputRepo, branch, baseSha);
   log('INFO', `[generateQaSpecFlow] QA branch created: ${branch}`);
+  dashboardBus.emitEvent('github', 'info', `QA branch created: ${branch}`, { branch, baseSha });
 
   // Run self-correction loop (QA agent + tsc validation)
   // The agent determines the feature from context; spec path is derived from its output
@@ -50,6 +52,7 @@ export async function generateQaSpecFlow(task: QATask): Promise<void> {
   );
 
   log('INFO', `[generateQaSpecFlow] Done — PR opened: ${prUrl}`);
+  dashboardBus.emitEvent('github', 'info', `PR opened: ${prUrl}`, { prUrl });
 
   // Notify trigger service via callbackUrl so it can comment on the originating ticket
   if (task.callbackUrl) {

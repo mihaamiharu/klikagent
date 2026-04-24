@@ -1,6 +1,7 @@
 import OpenAI from 'openai';
 import { AgentTool, ToolHandlers } from '../types';
 import { log } from '../utils/logger';
+import { dashboardBus } from '../dashboard/eventBus';
 
 const DEFAULT_MAX_ITERATIONS = parseInt(process.env.AI_MAX_ITERATIONS ?? '30', 10);
 const RETRYABLE_STATUS_CODES = new Set([429, 503, 529]);
@@ -125,6 +126,7 @@ export async function runAgent(
     if (assistantMessage.content) {
       const preview = assistantMessage.content.slice(0, 300).replace(/\n/g, ' ');
       log('INFO', `[AI] reasoning: ${preview}${assistantMessage.content.length > 300 ? '…' : ''}`);
+      dashboardBus.emitEvent('agent', 'info', 'AI Reasoning', { reasoning: assistantMessage.content });
     }
 
     // Append assistant turn to history
@@ -154,6 +156,7 @@ export async function runAgent(
         .map(([k, v]) => `${k}=${JSON.stringify(v)}`)
         .join(', ');
       log('INFO', `[AI] tool call: ${name}${argsSummary ? ` (${argsSummary})` : ''}`);
+      dashboardBus.emitEvent('agent', 'info', `Tool Call: ${name}`, { toolCall: name, args });
 
       // done() exits the loop
       if (name === 'done') {
@@ -164,6 +167,7 @@ export async function runAgent(
           costUSD: computeCost(promptTokens, completionTokens),
         };
         log('INFO', `[AI] tokens used — prompt: ${promptTokens}, completion: ${completionTokens}, total: ${tokenUsage.totalTokens}, cost: $${tokenUsage.costUSD.toFixed(4)}`);
+        dashboardBus.emitEvent('agent', 'info', 'AI Token Usage', { tokenUsage });
         return { args, tokenUsage };
       }
 
