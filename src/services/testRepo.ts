@@ -18,6 +18,10 @@ async function listDir(repoName: string, path: string, ref = 'HEAD'): Promise<st
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 
+export async function getPersonas(repoName: string): Promise<string> {
+  return await readFile(repoName, 'config/personas.ts') ?? '';
+}
+
 export async function getRouteMap(repoName: string): Promise<Record<string, string>> {
   const content = await readFile(repoName, 'config/routes.ts');
   if (!content) return {};

@@ -1,320 +1,126 @@
-/// <reference lib="dom" />
 /**
- * browserTools.ts — Browser automation tools for the AI agent tool loop.
+ * browserTools.ts — Browser automation tools backed by playwright-cli.
  *
- * Exposes browser automation as OpenAI function-calling compatible tools so the
- * agent can navigate, interact with, and snapshot a real browser during test
- * generation.
+ * playwright-cli maintains a persistent browser session (SESSION_ID) across
+ * sequential tool calls. Every fill/click action emits the corresponding
+ * Playwright TypeScript code ("generatedCode" in the response), which the
+ * agent collects to build accurate POM methods — no locator guessing needed.
  *
- * Implementation: Direct Playwright API. This is simpler, faster, and more
- * reliable than shelling out to @playwright/cli — no child process overhead,
- * no fragile stdout parsing, and full access to the Playwright API for
- * network interception, dialog handling, etc.
- *
- * Browser session lifecycle: a module-level session is maintained so the agent
- * can call tools sequentially (navigate → click → fill → snapshot) without
- * relaunching the browser on each call. Call `browser_close` to tear down.
+ * Snapshots return a YAML accessibility tree with element refs (e1, e2, ...).
+ * Use refs for interactions; use browser_generate_locator(ref) to obtain the
+ * Playwright locator for any element you observe but don't interact with.
  */
 
-import { chromium, Browser, BrowserContext, Page, Locator } from 'playwright';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
+import fs from 'fs';
+import path from 'path';
 import { AgentTool, ToolHandlers } from '../types';
 import { log } from '../utils/logger';
 
-// ─── Persona credentials ──────────────────────────────────────────────────────
+const execFileAsync = promisify(execFile);
 
-export interface Persona {
-  name: string;
-  email: string;
-  password: string;
+// ─── Auth state ───────────────────────────────────────────────────────────────
+
+const AUTH_DIR = process.env.PLAYWRIGHT_AUTH_DIR ?? path.join(process.cwd(), '.playwright-auth');
+
+export function authStatePath(persona: string, baseUrl?: string): string {
+  fs.mkdirSync(AUTH_DIR, { recursive: true });
+  // Include a URL slug when different QA envs are in play
+  const envSlug = baseUrl
+    ? `-${new URL(baseUrl).hostname.replace(/\./g, '-')}`
+    : '';
+  return path.join(AUTH_DIR, `${persona}${envSlug}.json`);
 }
 
-/**
- * Returns available test personas from environment variables.
- * Persona env vars follow the pattern:
- *   PERSONA_<NAME>_EMAIL=<email>
- *   PERSONA_<NAME>_PASSWORD=<password>
- *
- * A default "default" persona is always included using QA_USER_EMAIL /
- * QA_USER_PASSWORD for backward compatibility with the old crawler.
- */
-export function getPersonas(): Persona[] {
-  const personas: Persona[] = [];
+export function authStateExists(persona: string, baseUrl?: string): boolean {
+  return fs.existsSync(authStatePath(persona, baseUrl));
+}
 
-  // Default persona — backward compat with existing QA_USER_* env vars
-  const defaultEmail = process.env.QA_USER_EMAIL;
-  const defaultPassword = process.env.QA_USER_PASSWORD;
-  if (defaultEmail && defaultPassword) {
-    personas.push({ name: 'default', email: defaultEmail, password: defaultPassword });
+// ─── CLI runner ───────────────────────────────────────────────────────────────
+
+const SESSION_ID = 'klikagent';
+let sessionActive = false;
+
+async function cli(...args: string[]): Promise<string> {
+  const fullArgs = ['-s', SESSION_ID, ...args];
+  log('INFO', `[BrowserTools] playwright-cli ${fullArgs.join(' ')}`);
+  try {
+    const { stdout, stderr } = await execFileAsync('playwright-cli', fullArgs, { timeout: 30_000 });
+    return (stdout || stderr).trim();
+  } catch (err: unknown) {
+    const e = err as { stdout?: string; stderr?: string; message?: string };
+    const out = (e.stdout || e.stderr || e.message || String(err)).trim();
+    log('WARN', `[BrowserTools] CLI error: ${out}`);
+    return out;
   }
+}
 
-  // Discover additional PERSONA_<NAME>_EMAIL / PERSONA_<NAME>_PASSWORD pairs
-  for (const [key, value] of Object.entries(process.env)) {
-    const match = key.match(/^PERSONA_(.+)_EMAIL$/);
-    if (!match || !value) continue;
-    const name = match[1].toLowerCase();
-    const password = process.env[`PERSONA_${match[1]}_PASSWORD`];
-    if (!password) continue;
-    // Skip if this is already the default persona
-    if (name === 'default' && value === defaultEmail) continue;
-    personas.push({ name, email: value, password });
+// ─── Response helpers ─────────────────────────────────────────────────────────
+
+async function snapshotYaml(): Promise<string> {
+  return cli('--raw', 'snapshot');
+}
+
+async function pageUrl(): Promise<string> {
+  try {
+    return (await cli('--raw', 'eval', 'window.location.href')).trim();
+  } catch {
+    return '';
   }
-
-  return personas;
 }
 
-// ─── Module-level browser session ────────────────────────────────────────────
-
-interface BrowserSession {
-  browser: Browser;
-  context: BrowserContext;
-  page: Page;
+// Extract "Ran Playwright code:" block from a playwright-cli action output.
+function extractGeneratedCode(output: string): string | null {
+  const match = output.match(/Ran Playwright code:\s*([\s\S]+?)(?:\n###|\n---|\n\n|$)/);
+  return match?.[1]?.trim() ?? null;
 }
 
-let activeSession: BrowserSession | null = null;
-
-async function getOrCreateSession(): Promise<BrowserSession> {
-  if (activeSession) return activeSession;
-  const browser = await chromium.launch({ headless: true });
-  const context = await browser.newContext();
-  const page = await context.newPage();
-  activeSession = { browser, context, page };
-  return activeSession;
-}
-
-async function teardownSession(): Promise<void> {
-  if (!activeSession) return;
-  await activeSession.browser.close().catch(() => {});
-  activeSession = null;
-}
-
-// ─── Structured error shaping ─────────────────────────────────────────────────
-
-interface ToolError {
-  error: string;
-  message: string;
-  hint?: string;
-}
-
-function shapeError(err: unknown, operation: string): string {
-  const message = err instanceof Error ? err.message : String(err);
-  const msg = message.toLowerCase();
-
-  if (msg.includes('timeout') || msg.includes('timed out')) {
-    const shaped: ToolError = {
-      error: 'TIMEOUT',
-      message,
-      hint: 'The element or page took too long. Call browser_snapshot() to check current state.',
-    };
-    return JSON.stringify(shaped);
-  }
-
-  if (msg.includes('not found') || msg.includes('no element') || msg.includes('strict mode violation')) {
-    const shaped: ToolError = {
-      error: 'LOCATOR_NOT_FOUND',
-      message,
-      hint: 'The locator did not match any element. Call browser_list_interactables() to see available elements.',
-    };
-    return JSON.stringify(shaped);
-  }
-
-  if (msg.includes('net::err_connection_refused') || msg.includes('connection refused')) {
-    const shaped: ToolError = {
-      error: 'CONNECTION_REFUSED',
-      message,
-      hint: `Cannot connect to the app. Is ${process.env.QA_BASE_URL ?? 'the QA app'} running?`,
-    };
-    return JSON.stringify(shaped);
-  }
-
-  const shaped: ToolError = {
-    error: 'BROWSER_ERROR',
-    message,
-    hint: `${operation} failed. Call browser_snapshot() to check current state.`,
-  };
-  return JSON.stringify(shaped);
-}
-
-// ─── Snapshot helper ──────────────────────────────────────────────────────────
-
-const INTERACTIVE_SELECTOR =
-  'button, a[href], input, select, textarea, ' +
-  '[role="button"], [role="link"], [role="checkbox"], [role="radio"], ' +
-  '[role="tab"], [role="menuitem"], [role="option"], [role="combobox"], ' +
-  '[role="textbox"], [role="switch"]';
-
-export interface InteractableElement {
-  role: string;
-  label: string;
-  selector: string;
-}
-
-// Converts a selector string produced by extractInteractables (e.g. "getByLabel('Email')")
-// into an actual Playwright Locator. page.locator() only accepts CSS/XPath — not these strings.
-function locatorFromSelector(page: Page, selector: string): Locator {
-  const testId = selector.match(/^getByTestId\('(.+?)'\)$/);
-  if (testId) return page.getByTestId(testId[1]);
-
-  const label = selector.match(/^getByLabel\('(.+?)'\)$/);
-  if (label) return page.getByLabel(label[1]);
-
-  const placeholder = selector.match(/^getByPlaceholder\('(.+?)'\)$/);
-  if (placeholder) return page.getByPlaceholder(placeholder[1]);
-
-  const role = selector.match(/^getByRole\('(\w+)',\s*\{\s*name:\s*'(.+?)'\s*\}\)$/);
-  if (role) return page.getByRole(role[1] as Parameters<Page['getByRole']>[0], { name: role[2] });
-
-  return page.locator(selector);
-}
-
-async function extractInteractables(page: Page): Promise<InteractableElement[]> {
-  return page.evaluate((selector: string) => {
-    const TAG_TO_ROLE: Record<string, string> = {
-      button: 'button',
-      a: 'link',
-      select: 'combobox',
-      textarea: 'textbox',
-    };
-
-    function inputRole(el: HTMLInputElement): string {
-      const map: Record<string, string> = {
-        checkbox: 'checkbox', radio: 'radio', range: 'slider',
-        search: 'searchbox', spinbutton: 'spinbutton',
-      };
-      return map[el.type] ?? 'textbox';
-    }
-
-    function getRole(el: Element): string {
-      const explicit = el.getAttribute('role');
-      if (explicit) return explicit;
-      const tag = el.tagName.toLowerCase();
-      if (tag === 'input') return inputRole(el as HTMLInputElement);
-      return TAG_TO_ROLE[tag] ?? tag;
-    }
-
-    function safeName(s: string): string {
-      return s.trim().replace(/'/g, "\\'").slice(0, 60);
-    }
-
-    function bestLocator(el: Element): { role: string; label: string; selector: string } | null {
-      const role = getRole(el);
-
-      const testId = el.getAttribute('data-testid');
-      if (testId) return { role, label: testId, selector: `getByTestId('${safeName(testId)}')` };
-
-      const ariaLabel = el.getAttribute('aria-label');
-      if (ariaLabel) return { role, label: ariaLabel, selector: `getByRole('${role}', { name: '${safeName(ariaLabel)}' })` };
-
-      const id = el.getAttribute('id');
-      if (id) {
-        const labelEl = document.querySelector<HTMLElement>(`label[for="${id}"]`);
-        const labelText = labelEl?.textContent?.trim();
-        if (labelText) return { role, label: labelText, selector: `getByLabel('${safeName(labelText)}')` };
-      }
-
-      const placeholder = (el as HTMLInputElement).placeholder;
-      if (placeholder) return { role, label: placeholder, selector: `getByPlaceholder('${safeName(placeholder)}')` };
-
-      const text = el.textContent?.trim();
-      if (text && text.length <= 60 && (role === 'button' || role === 'link')) {
-        return { role, label: text, selector: `getByRole('${role}', { name: '${safeName(text)}' })` };
-      }
-
-      return null;
-    }
-
-    const seen = new Set<string>();
-    const results: Array<{ role: string; label: string; selector: string }> = [];
-    document.querySelectorAll(selector).forEach((el) => {
-      const result = bestLocator(el);
-      if (result && !seen.has(result.selector)) {
-        seen.add(result.selector);
-        results.push(result);
-      }
-    });
-    return results;
-  }, INTERACTIVE_SELECTOR);
-}
-
-async function takeSnapshot(page: Page): Promise<string> {
-  // Expand collapsed elements to reveal lazy content
-  await page.evaluate(() => {
-    document.querySelectorAll<HTMLElement>('[aria-expanded="false"]').forEach((el) => el.click());
-    document.querySelectorAll<HTMLElement>('details:not([open])').forEach((el) => el.setAttribute('open', ''));
-  });
-  await page.waitForTimeout(300);
-
-  const [ariaTree, interactables] = await Promise.all([
-    page.locator('body').ariaSnapshot({ mode: 'ai', timeout: 5_000 }).catch(() => ''),
-    extractInteractables(page),
-  ]);
-
-  return JSON.stringify({
-    url: page.url(),
-    ariaTree,
-    interactables,
-  });
+async function buildResponse(actionOutput?: string): Promise<string> {
+  const [url, snapshot] = await Promise.all([pageUrl(), snapshotYaml()]);
+  const generatedCode = actionOutput ? extractGeneratedCode(actionOutput) : null;
+  return JSON.stringify({ url, snapshot, generatedCode });
 }
 
 // ─── Tool handlers ────────────────────────────────────────────────────────────
 
 async function handleNavigate(args: Record<string, unknown>): Promise<string> {
   let url = String(args['url'] ?? '');
-  const personaName = args['persona'] ? String(args['persona']) : 'default';
-
   if (!url) throw new Error('browser_navigate: url is required');
 
-  // Rewrite localhost URLs to QA_BASE_URL so the agent doesn't need to know the real host
+  const persona = args['persona'] ? String(args['persona']) : null;
   const baseUrl = process.env.QA_BASE_URL ?? 'http://localhost:3000';
-  const localhostPattern = /^https?:\/\/localhost(:\d+)?/;
-  if (localhostPattern.test(url)) {
+
+  if (/^https?:\/\/localhost(:\d+)?/.test(url)) {
     const parsed = new URL(url);
     url = baseUrl.replace(/\/$/, '') + parsed.pathname + parsed.search + parsed.hash;
     log('INFO', `[BrowserTools] Rewrote localhost URL to ${url}`);
   }
 
-  const session = await getOrCreateSession();
-  const { page } = session;
-
-  // Authenticate as the requested persona if credentials are available
-  const personas = getPersonas();
-  const persona = personas.find((p) => p.name === personaName) ?? personas[0];
-
-  if (persona) {
-    const loginUrl = `${baseUrl}/login`;
-    log('INFO', `[BrowserTools] Authenticating as persona "${persona.name}" at ${loginUrl}`);
-
-    try {
-      await page.goto(loginUrl, { waitUntil: 'networkidle', timeout: 30_000 });
-
-      const interactables = await extractInteractables(page);
-      const emailField = interactables.find(
-        (el) => el.role === 'textbox' && /email|username/i.test(el.label),
-      );
-      const passwordField = interactables.find(
-        (el) => el.role === 'textbox' && /password|pass/i.test(el.label),
-      );
-
-      if (emailField && passwordField) {
-        log('INFO', `[BrowserTools] Using discovered auth fields: ${emailField.selector}, ${passwordField.selector}`);
-        await locatorFromSelector(page, emailField.selector).first().fill(persona.email);
-        await locatorFromSelector(page, passwordField.selector).first().fill(persona.password);
-        await page.keyboard.press('Enter');
-        await page.waitForNavigation({ timeout: 10_000 }).catch(() => {});
-        log('INFO', `[BrowserTools] Login submitted`);
-      } else {
-        log('WARN', `[BrowserTools] Could not discover email/password fields in interactables — skipping auth`);
-      }
-    } catch (err) {
-      log('WARN', `[BrowserTools] Authentication failed: ${err instanceof Error ? err.message : err}`);
-    }
-  }
-
-  log('INFO', `[BrowserTools] Navigating to ${url}`);
   try {
-    await page.goto(url, { waitUntil: 'networkidle', timeout: 30_000 });
-    return await takeSnapshot(page);
+    if (!sessionActive) {
+      // Open a blank session first so we can inject auth state before navigating
+      log('INFO', `[BrowserTools] Opening new browser session`);
+      await cli('open');
+      sessionActive = true;
+
+      // Auto-load saved auth state for the persona, if available
+      if (persona) {
+        const stateFile = authStatePath(persona, baseUrl);
+        if (fs.existsSync(stateFile)) {
+          log('INFO', `[BrowserTools] Loading saved auth state for "${persona}" from ${stateFile}`);
+          await cli('state-load', stateFile);
+        } else {
+          log('INFO', `[BrowserTools] No saved auth state for "${persona}" — agent will log in manually`);
+        }
+      }
+    }
+
+    log('INFO', `[BrowserTools] Navigating to ${url}`);
+    const out = await cli('goto', url);
+    return await buildResponse(out);
   } catch (err) {
-    return shapeError(err, 'browser_navigate');
+    return JSON.stringify({ error: 'BROWSER_ERROR', message: String(err) });
   }
 }
 
@@ -322,20 +128,12 @@ async function handleClick(args: Record<string, unknown>): Promise<string> {
   const selector = String(args['selector'] ?? '');
   if (!selector) throw new Error('browser_click: selector is required');
 
-  const session = await getOrCreateSession();
-  const { page } = session;
-
   log('INFO', `[BrowserTools] Clicking: ${selector}`);
   try {
-    await locatorFromSelector(page, selector).first().click({ timeout: 10_000 });
-
-    // Wait for any navigation or network activity to settle
-    await page.waitForTimeout(500);
-    await page.waitForLoadState('networkidle').catch(() => {});
-
-    return await takeSnapshot(page);
+    const out = await cli('click', selector);
+    return await buildResponse(out);
   } catch (err) {
-    return shapeError(err, 'browser_click');
+    return JSON.stringify({ error: 'BROWSER_ERROR', message: String(err) });
   }
 }
 
@@ -344,167 +142,236 @@ async function handleFill(args: Record<string, unknown>): Promise<string> {
   const value = String(args['value'] ?? '');
   if (!selector) throw new Error('browser_fill: selector is required');
 
-  const session = await getOrCreateSession();
-  const { page } = session;
-
   log('INFO', `[BrowserTools] Filling "${selector}" with "${value}"`);
   try {
-    await locatorFromSelector(page, selector).first().fill(value, { timeout: 10_000 });
-    // Return a snapshot so the agent can see the result of the fill
-    return await takeSnapshot(page);
+    const out = await cli('fill', selector, value);
+    return await buildResponse(out);
   } catch (err) {
-    return shapeError(err, 'browser_fill');
+    return JSON.stringify({ error: 'BROWSER_ERROR', message: String(err) });
   }
 }
 
 async function handleSnapshot(_args: Record<string, unknown>): Promise<string> {
-  const session = await getOrCreateSession();
-  return await takeSnapshot(session.page);
+  return buildResponse();
 }
 
 async function handleListInteractables(_args: Record<string, unknown>): Promise<string> {
-  const session = await getOrCreateSession();
-  const { page } = session;
+  // Alias for snapshot — playwright-cli snapshots include all interactable refs
+  return buildResponse();
+}
 
-  log('INFO', `[BrowserTools] Listing interactable elements`);
-  const interactables = await extractInteractables(page);
-  return JSON.stringify({
-    url: page.url(),
-    interactables,
-  });
+async function handleGenerateLocator(args: Record<string, unknown>): Promise<string> {
+  const ref = String(args['ref'] ?? '');
+  if (!ref) throw new Error('browser_generate_locator: ref is required');
+  log('INFO', `[BrowserTools] Generating locator for ref: ${ref}`);
+  return cli('--raw', 'generate-locator', ref);
+}
+
+async function handleEval(args: Record<string, unknown>): Promise<string> {
+  const expression = String(args['expression'] ?? '');
+  if (!expression) throw new Error('browser_eval: expression is required');
+  const ref = args['ref'] ? String(args['ref']) : null;
+  log('INFO', `[BrowserTools] Eval "${expression}"${ref ? ` on ${ref}` : ''}`);
+  const extra = ref ? ['eval', expression, ref] : ['eval', expression];
+  return cli('--raw', ...extra);
+}
+
+async function handleCommand(args: Record<string, unknown>): Promise<string> {
+  const cmdArgs = args['args'] as string[] | undefined;
+  if (!Array.isArray(cmdArgs) || cmdArgs.length === 0) {
+    throw new Error('browser_command: args array is required');
+  }
+  log('INFO', `[BrowserTools] browser_command: ${cmdArgs.join(' ')}`);
+  try {
+    return await cli(...cmdArgs);
+  } catch (err) {
+    return JSON.stringify({ error: 'BROWSER_ERROR', message: String(err) });
+  }
 }
 
 async function handleClose(_args: Record<string, unknown>): Promise<string> {
   log('INFO', `[BrowserTools] Closing browser session`);
-  await teardownSession();
+  try {
+    await cli('close');
+  } catch {
+    // ignore — session may already be gone
+  }
+  sessionActive = false;
   return JSON.stringify({ ok: true });
 }
 
-// ─── OpenAI tool definitions ──────────────────────────────────────────────────
+// ─── Tool definitions ─────────────────────────────────────────────────────────
 
 export function buildBrowserTools(): AgentTool[] {
   const baseUrl = process.env.QA_BASE_URL ?? 'http://localhost:3000';
   return [
-  {
-    type: 'function',
-    function: {
-      name: 'browser_navigate',
-      description:
-        'Launch a headless browser, authenticate as the given persona, navigate to the URL, and return a page snapshot. ' +
-        'The snapshot includes an ARIA accessibility tree and a list of interactable elements with Playwright locators. ' +
-        'Must be called first before any other browser tool.',
-      parameters: {
-        type: 'object',
-        properties: {
-          url: {
-            type: 'string',
-            description: `The fully-qualified URL to navigate to. The app base URL is "${baseUrl}" — use this as the host for all navigation (e.g. "${baseUrl}/dashboard").`,
+    {
+      type: 'function',
+      function: {
+        name: 'browser_navigate',
+        description:
+          'Open the browser and navigate to a URL. Returns a YAML accessibility snapshot with element refs (e1, e2, ...) and the current page URL. ' +
+          'Must be called before any other browser tool. On first call, opens a new browser session. ' +
+          'Pass "persona" (e.g. "patient", "doctor", "admin") to auto-load saved auth state — if a state file exists for that persona the browser will already be authenticated and the app will skip the login page.',
+        parameters: {
+          type: 'object',
+          properties: {
+            url: {
+              type: 'string',
+              description: `Fully-qualified URL to navigate to. App base URL is "${baseUrl}".`,
+            },
+            persona: {
+              type: 'string',
+              description:
+                'Persona name to load saved auth state for (e.g. "patient", "doctor", "admin"). ' +
+                'If a saved state exists the session will be pre-authenticated. ' +
+                'If not, the app will redirect to login — log in manually then call ' +
+                'browser_command(["state-save", ".playwright-auth/{persona}.json"]) to persist for next time.',
+            },
           },
-          persona: {
-            type: 'string',
-            description:
-              'The persona name to authenticate as. Must match one of the configured personas (e.g. "default", "admin", "viewer"). Defaults to "default".',
-          },
+          required: ['url'],
         },
-        required: ['url'],
       },
     },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'browser_click',
-      description:
-        'Click an element on the current page using a Playwright locator from a previous snapshot\'s interactables list ' +
-        '(e.g. getByRole("button", { name: "Submit" }) or getByTestId("submit-btn")). ' +
-        'Returns an updated snapshot after the click.',
-      parameters: {
-        type: 'object',
-        properties: {
-          selector: {
-            type: 'string',
-            description:
-              'A Playwright locator string from a previous snapshot\'s interactables array, e.g. "getByRole(\'button\', { name: \'Login\' })"',
+    {
+      type: 'function',
+      function: {
+        name: 'browser_click',
+        description:
+          'Click an element using an element ref from the snapshot (e.g. "e15") or a Playwright locator string. ' +
+          'Response includes "generatedCode" — the exact Playwright code for this click. Collect these for your POM.',
+        parameters: {
+          type: 'object',
+          properties: {
+            selector: {
+              type: 'string',
+              description: 'Element ref from the snapshot (e.g. "e15") or Playwright locator (e.g. "getByTestId(\'login-btn\')")',
+            },
           },
+          required: ['selector'],
         },
-        required: ['selector'],
       },
     },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'browser_fill',
-      description:
-        'Fill a form input on the current page. ' +
-        'Use a locator from a previous snapshot\'s interactables list. Returns an updated snapshot.',
-      parameters: {
-        type: 'object',
-        properties: {
-          selector: {
-            type: 'string',
-            description:
-              'A Playwright locator string for the input element, e.g. "getByLabel(\'Email\')"',
+    {
+      type: 'function',
+      function: {
+        name: 'browser_fill',
+        description:
+          'Fill a form input. Use an element ref from the snapshot or a Playwright locator string. ' +
+          'Response includes "generatedCode" — the exact Playwright code for this fill. Collect these for your POM.',
+        parameters: {
+          type: 'object',
+          properties: {
+            selector: {
+              type: 'string',
+              description: 'Element ref (e.g. "e5") or Playwright locator (e.g. "getByLabel(\'Email\')")',
+            },
+            value: {
+              type: 'string',
+              description: 'The value to type into the field',
+            },
           },
-          value: {
-            type: 'string',
-            description: 'The value to type into the field',
-          },
+          required: ['selector', 'value'],
         },
-        required: ['selector', 'value'],
       },
     },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'browser_snapshot',
-      description:
-        'Capture the current page state without any interaction. ' +
-        'Returns a snapshot with ARIA tree and interactable elements with Playwright locators. ' +
-        'Use after any interaction to observe what changed on the page.',
-      parameters: {
-        type: 'object',
-        properties: {},
-        required: [],
+    {
+      type: 'function',
+      function: {
+        name: 'browser_snapshot',
+        description:
+          'Get a fresh YAML accessibility snapshot of the current page with element refs (e1, e2, ...). Use to observe page state after interactions.',
+        parameters: { type: 'object', properties: {}, required: [] },
       },
     },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'browser_list_interactables',
-      description:
-        'List all interactive elements on the current page with their roles, labels, and Playwright locators. ' +
-        'Use this to discover what elements are available before interacting with them. ' +
-        'Returns a list of { role, label, selector } objects.',
-      parameters: {
-        type: 'object',
-        properties: {},
-        required: [],
+    {
+      type: 'function',
+      function: {
+        name: 'browser_list_interactables',
+        description:
+          'Alias for browser_snapshot — returns the current page snapshot including all interactable elements with refs.',
+        parameters: { type: 'object', properties: {}, required: [] },
       },
     },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'browser_close',
-      description:
-        'Close the browser session. Call this when browser exploration is complete ' +
-        'to free resources before calling done().',
-      parameters: {
-        type: 'object',
-        properties: {},
-        required: [],
+    {
+      type: 'function',
+      function: {
+        name: 'browser_generate_locator',
+        description:
+          'Generate the Playwright locator expression for an element ref from the current snapshot. ' +
+          'Use this for POM properties you observe but do not directly interact with (so no "generatedCode" is produced for them). ' +
+          'Returns a string like: getByRole(\'button\', { name: \'Submit\' }) or getByTestId(\'email-input\').',
+        parameters: {
+          type: 'object',
+          properties: {
+            ref: {
+              type: 'string',
+              description: 'Element ref from the current snapshot, e.g. "e5"',
+            },
+          },
+          required: ['ref'],
+        },
       },
     },
-  },
+    {
+      type: 'function',
+      function: {
+        name: 'browser_eval',
+        description:
+          'Evaluate a JavaScript expression on the page or on a specific element. ' +
+          'Use to inspect attributes not visible in the snapshot (e.g. data-testid, value, aria-label).',
+        parameters: {
+          type: 'object',
+          properties: {
+            expression: {
+              type: 'string',
+              description: 'JS expression e.g. "window.location.href" or "el => el.getAttribute(\'data-testid\')"',
+            },
+            ref: {
+              type: 'string',
+              description: 'Optional element ref to scope the expression to, e.g. "e5"',
+            },
+          },
+          required: ['expression'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'browser_command',
+        description:
+          'Run any playwright-cli command in the current browser session. ' +
+          'Use for features not covered by the named tools: screenshots, tracing, video, network mocking, run-code, storage, tabs, etc. ' +
+          'The session flag (-s klikagent) is automatically prepended — pass only the command and its arguments. ' +
+          'Examples: ["screenshot", "--filename=step1.png"], ["tracing-start"], ["tracing-stop"], ' +
+          '["route", "**/*.jpg", "--status=404"], ["run-code", "async page => { ... }"], ' +
+          '["--raw", "eval", "document.title"], ["state-save", "auth.json"], ["state-load", "auth.json"]',
+        parameters: {
+          type: 'object',
+          properties: {
+            args: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'playwright-cli command and arguments as an array, e.g. ["screenshot", "--filename=page.png"]',
+            },
+          },
+          required: ['args'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'browser_close',
+        description: 'Close the browser session. Call when exploration is complete, before calling done().',
+        parameters: { type: 'object', properties: {}, required: [] },
+      },
+    },
   ];
 }
 
 export const browserTools: AgentTool[] = buildBrowserTools();
-
-// ─── OpenAI tool handlers ─────────────────────────────────────────────────────
 
 export const browserHandlers: ToolHandlers = {
   browser_navigate: handleNavigate,
@@ -512,5 +379,8 @@ export const browserHandlers: ToolHandlers = {
   browser_fill: handleFill,
   browser_snapshot: handleSnapshot,
   browser_list_interactables: handleListInteractables,
+  browser_generate_locator: handleGenerateLocator,
+  browser_eval: handleEval,
+  browser_command: handleCommand,
   browser_close: handleClose,
 };

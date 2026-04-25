@@ -8,6 +8,86 @@ import { log } from '../utils/logger';
 import { dashboardBus } from '../dashboard/eventBus';
 import { AgentTool } from '../types';
 
+type Pom = { pomContent: string; pomPath: string };
+
+function checkSpecConventions(specContent: string): string[] {
+  const violations: string[] = [];
+
+  if (/new \w+Page\(page\)/.test(specContent)) {
+    violations.push(
+      'Spec constructs a POM manually with `new PageClass(page)`. ' +
+      'After registering the POM as a fixture, use it as a test parameter instead: ' +
+      '`test("...", async ({ authPage }) => {})` — do NOT use a module-level ' +
+      '`let authPage: AuthPage` variable populated in `beforeEach`.',
+    );
+  }
+
+  if (/^\s*let \w+[Pp]age\s*:/m.test(specContent)) {
+    violations.push(
+      'Spec declares a module-level page object variable (`let xPage: XPage`). ' +
+      'Receive it as a fixture parameter in each test function instead: ' +
+      '`async ({ authPage }) => {}`.',
+    );
+  }
+
+  if (/\.\s*login\s*\(\s*['"][^'"]*@[^'"]*['"]/.test(specContent)) {
+    violations.push(
+      'Spec passes a hardcoded email address to a login call. ' +
+      'Import personas from config/personas.ts and use the typed values instead: ' +
+      '`import { personas } from \'../../../config/personas\'; ' +
+      'authPage.login(personas.patient.email, personas.patient.password)`.',
+    );
+  }
+
+  return violations;
+}
+
+function checkPomConventions(poms: Pom[]): string[] {
+  const violations: string[] = [];
+
+  for (const { pomContent, pomPath } of poms) {
+    if (/Welcome back,\s*\w+/.test(pomContent)) {
+      violations.push(
+        `${pomPath}: POM assertion method contains a hardcoded persona name (e.g. "Welcome back, Jane!"). ` +
+        'POM helpers must be persona-agnostic. Accept the name as a parameter ' +
+        '(`expectOnDashboard(expectedName?: string)`) or remove the heading check and let the test assert it.',
+      );
+    }
+  }
+
+  return violations;
+}
+
+const fixConventionsDoneTool: AgentTool = {
+  type: 'function',
+  function: {
+    name: 'done',
+    description: 'Submit corrected files. Call when all convention fixes are complete.',
+    parameters: {
+      type: 'object',
+      properties: {
+        fixedSpec: {
+          type: 'string',
+          description: 'The corrected spec content.',
+        },
+        fixedPoms: {
+          type: 'array',
+          description: 'Corrected POM files — include only the ones that changed.',
+          items: {
+            type: 'object',
+            properties: {
+              pomContent: { type: 'string' },
+              pomPath: { type: 'string' },
+            },
+            required: ['pomContent', 'pomPath'],
+          },
+        },
+      },
+      required: ['fixedSpec'],
+    },
+  },
+};
+
 export interface SelfCorrectionResult {
   feature: string;
   specContent: string;
@@ -63,7 +143,42 @@ export async function runWithSelfCorrection(
   const fixtureUpdate = qaResult.fixtureUpdate;
   let tokenUsage = qaResult.tokenUsage;
 
-  // Step 2: TypeScript validation loop — up to maxAttempts corrections
+  // Step 2: Convention check — catches pattern violations that tsc cannot
+  const specViolations = checkSpecConventions(specContent);
+  const pomViolations = checkPomConventions(poms);
+  const allViolations = [...specViolations, ...pomViolations];
+
+  if (allViolations.length > 0) {
+    log('WARN', `[selfCorrection] ${allViolations.length} convention violation(s) found`);
+    dashboardBus.emitEvent('correction', 'warn', 'Convention violations detected', { violations: allViolations });
+
+    const conventionFixTools = [...qaTools.filter((t) => t.function.name !== 'done'), fixConventionsDoneTool];
+    const violationList = allViolations.map((v, i) => `${i + 1}. ${v}`).join('\n');
+    const pomSummary = poms.map((p) => `### ${p.pomPath}\n${p.pomContent}`).join('\n\n');
+
+    const { args, tokenUsage: fixUsage } = await runAgent(
+      'Fix the convention violations listed below in this Playwright spec and/or POM files. Fix ONLY what is listed — do not change any other logic.',
+      `VIOLATIONS:\n${violationList}\n\n### Spec\n${specContent}\n\n${pomSummary}`,
+      conventionFixTools,
+      createQaHandlers(repoName),
+    );
+
+    tokenUsage = addTokenUsage(tokenUsage, fixUsage);
+    specContent = args.fixedSpec as string;
+
+    const fixedPoms = args.fixedPoms as Pom[] | undefined;
+    if (fixedPoms?.length) {
+      for (const fixed of fixedPoms) {
+        const idx = poms.findIndex((p) => p.pomPath === fixed.pomPath);
+        if (idx !== -1) poms[idx] = fixed;
+      }
+    }
+
+    log('INFO', '[selfCorrection] Convention corrections applied');
+    dashboardBus.emitEvent('correction', 'info', 'Convention corrections applied', { tokenUsage: fixUsage });
+  }
+
+  // Step 3: TypeScript validation loop — up to maxAttempts corrections
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     dashboardBus.emitEvent('validation', 'info', `TypeScript validation check (attempt ${attempt})`, { attempt });
     const tsResultRaw = await validateTypescriptHandler.validate_typescript({ code: specContent });

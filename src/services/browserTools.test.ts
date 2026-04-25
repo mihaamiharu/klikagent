@@ -11,6 +11,9 @@ describe('browserTools', () => {
       'browser_fill',
       'browser_snapshot',
       'browser_list_interactables',
+      'browser_generate_locator',
+      'browser_eval',
+      'browser_command',
       'browser_close',
     ]);
   });
@@ -40,6 +43,21 @@ describe('browserTools', () => {
     expect(snapshot.function.parameters.required).toHaveLength(0);
   });
 
+  it('browser_generate_locator requires ref parameter', () => {
+    const gen = tools.find((t) => t.function.name === 'browser_generate_locator')!;
+    expect(gen.function.parameters.required).toContain('ref');
+  });
+
+  it('browser_eval requires expression parameter', () => {
+    const ev = tools.find((t) => t.function.name === 'browser_eval')!;
+    expect(ev.function.parameters.required).toContain('expression');
+  });
+
+  it('browser_command requires args parameter', () => {
+    const cmd = tools.find((t) => t.function.name === 'browser_command')!;
+    expect(cmd.function.parameters.required).toContain('args');
+  });
+
   it('browser_close has no required params', () => {
     const close = tools.find((t) => t.function.name === 'browser_close')!;
     expect(close.function.parameters.required).toHaveLength(0);
@@ -53,6 +71,9 @@ describe('browserHandlers', () => {
     'browser_fill',
     'browser_snapshot',
     'browser_list_interactables',
+    'browser_generate_locator',
+    'browser_eval',
+    'browser_command',
     'browser_close',
   ];
 
