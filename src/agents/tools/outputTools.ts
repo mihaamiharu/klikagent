@@ -57,6 +57,7 @@ export const qaDoneTool: AgentTool = {
           },
         },
         affectedPaths: { type: 'string', description: 'Comma-separated test paths affected by the PR diff e.g. "tests/web/auth/,tests/web/checkout/"' },
+        fixtureUpdate: { type: 'string', description: 'Full updated content of fixtures/index.ts with the new POM(s) imported and registered. Omit only if the fixtures file already registers all POMs used by this spec.' },
       },
       required: ['feature', 'enrichedSpec', 'poms', 'affectedPaths'],
     },
@@ -151,6 +152,15 @@ export const validateTypescriptHandler: ToolHandlers = {
       if (pattern.test(code)) {
         errors.push({ line: 0, message: hint });
       }
+    }
+    // Conditional checks: flag patterns that require something else to also be present
+    const usesExpect = /\bawait\s+expect\s*\(/.test(code);
+    const importsExpect = /import\s*{[^}]*\bexpect\b[^}]*}/.test(code);
+    if (usesExpect && !importsExpect) {
+      errors.push({
+        line: 0,
+        message: 'Code uses expect() but does not import it. Add expect to your import: import { Page, Locator, expect } from \'@playwright/test\' (for POMs) or import { test, expect } from \'../fixtures\' (for specs)',
+      });
     }
     return JSON.stringify({ valid: errors.length === 0, errors });
   },

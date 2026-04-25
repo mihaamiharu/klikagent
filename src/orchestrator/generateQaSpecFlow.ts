@@ -23,7 +23,7 @@ export async function generateQaSpecFlow(task: QATask): Promise<void> {
   // Run self-correction loop (QA agent + tsc validation)
   // The agent determines the feature from context; spec path is derived from its output
   const result = await runWithSelfCorrection(task, branch);
-  const { feature, specContent, poms, affectedPaths, tokenUsage } = result;
+  const { feature, specContent, poms, affectedPaths, fixtureUpdate, tokenUsage } = result;
 
   log('INFO', `[generateQaSpecFlow] Agent determined feature=${feature}`);
 
@@ -41,6 +41,13 @@ export async function generateQaSpecFlow(task: QATask): Promise<void> {
       task.outputRepo, branch, pomPath, pomContent,
       `feat(pom): add ${feature} POM for #${task.taskId} [klikagent]`,
     );
+  }
+  if (fixtureUpdate) {
+    await commitFile(
+      task.outputRepo, branch, 'fixtures/index.ts', fixtureUpdate,
+      `feat(fixtures): register ${feature} POM for #${task.taskId} [klikagent]`,
+    );
+    log('INFO', `[generateQaSpecFlow] Committed fixtures/index.ts`);
   }
 
   // Open draft PR in output repo
