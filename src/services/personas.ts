@@ -4,6 +4,7 @@ import { log } from '../utils/logger';
 export interface Persona {
   email: string;
   password: string;
+  [key: string]: string; // Support additional fields like displayName, role, etc.
 }
 
 export type PersonaMap = Record<string, Persona>;

@@ -1,4 +1,4 @@
-import { QATask } from '../types';
+import { QATask, PersonaMap } from '../types';
 import { runQaAgent } from '../agents/qaAgent';
 import { runAgent, TokenUsage } from './ai';
 import { validateTypescriptHandler } from '../agents/tools/outputTools';
@@ -7,11 +7,30 @@ import { maxSelfCorrectionAttempts } from './testRepoClone';
 import { log } from '../utils/logger';
 import { dashboardBus } from '../dashboard/eventBus';
 import { AgentTool } from '../types';
+import { getPersonas } from './personas';
 
 type Pom = { pomContent: string; pomPath: string };
 
-function checkSpecConventions(specContent: string): string[] {
+function getForbiddenPersonaStrings(personaMap: PersonaMap): string[] {
+  const forbidden = new Set<string>();
+  for (const persona of Object.values(personaMap)) {
+    for (const [key, value] of Object.entries(persona)) {
+      if (key === 'password' || key === 'email') continue;
+      if (typeof value === 'string' && value.length > 2) {
+        forbidden.add(value);
+      }
+    }
+  }
+  // Also add role keys
+  for (const role of Object.keys(personaMap)) {
+    if (role.length > 2) forbidden.add(role);
+  }
+  return Array.from(forbidden);
+}
+
+function checkSpecConventions(specContent: string, personaMap: PersonaMap): string[] {
   const violations: string[] = [];
+  const forbiddenStrings = getForbiddenPersonaStrings(personaMap);
 
   if (/(?<!expect\(\s*)page\.(?:locator|getBy(?:Role|Text|Label|Placeholder|AltText|Title|TestId))\b/.test(specContent)) {
     violations.push(
@@ -21,11 +40,17 @@ function checkSpecConventions(specContent: string): string[] {
     );
   }
 
-  if (/(?:Welcome back,?\s*)?(?:Jane\s*Doe|John\s*Smith|Jane|John)/i.test(specContent)) {
-    violations.push(
-      'Spec contains hardcoded persona names (like "Jane Doe"). ' +
-      'Assertions must be persona-agnostic or use dynamic data from the `personas` object.'
-    );
+  // Dynamic persona check
+  for (const str of forbiddenStrings) {
+    const escaped = str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const regex = new RegExp(`(?<!personas\\.\\w+\\.)\\b${escaped}\\b`, 'i');
+    if (regex.test(specContent)) {
+      violations.push(
+        `Spec contains hardcoded persona data ("${str}"). ` +
+        'Assertions and locators must be persona-agnostic or use dynamic data from the imported `personas` object.'
+      );
+      break; // One violation is enough to trigger a fix
+    }
   }
 
   if (/new \w+Page\(page\)/.test(specContent)) {
@@ -57,8 +82,9 @@ function checkSpecConventions(specContent: string): string[] {
   return violations;
 }
 
-function checkPomConventions(poms: Pom[]): string[] {
+function checkPomConventions(poms: Pom[], personaMap: PersonaMap): string[] {
   const violations: string[] = [];
+  const forbiddenStrings = getForbiddenPersonaStrings(personaMap);
 
   for (const { pomContent, pomPath } of poms) {
     if (/Welcome back,\s*\w+/.test(pomContent)) {
@@ -67,6 +93,19 @@ function checkPomConventions(poms: Pom[]): string[] {
         'POM helpers must be persona-agnostic. Accept the name as a parameter ' +
         '(`expectOnDashboard(expectedName?: string)`) or remove the heading check and let the test assert it.',
       );
+    }
+
+    for (const str of forbiddenStrings) {
+      const escaped = str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const regex = new RegExp(`(['"])${escaped}\\1`, 'i');
+      if (regex.test(pomContent)) {
+        violations.push(
+          `${pomPath}: POM contains hardcoded persona data ("${str}"). ` +
+          'POM locators and assertions must be dynamic and parameterized. ' +
+          'Use methods that accept arguments like `async expectUserProfile(name: string)` instead of static properties.'
+        );
+        break;
+      }
     }
   }
 
@@ -159,8 +198,9 @@ export async function runWithSelfCorrection(
   let tokenUsage = qaResult.tokenUsage;
 
   // Step 2: Convention check — catches pattern violations that tsc cannot
-  const specViolations = checkSpecConventions(specContent);
-  const pomViolations = checkPomConventions(poms);
+  const personaMap = await getPersonas(repoName, []);
+  const specViolations = checkSpecConventions(specContent, personaMap);
+  const pomViolations = checkPomConventions(poms, personaMap);
   const allViolations = [...specViolations, ...pomViolations];
 
   if (allViolations.length > 0) {
