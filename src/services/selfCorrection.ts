@@ -30,6 +30,15 @@ function checkSpecConventions(specContent: string): string[] {
     );
   }
 
+  if (/\.\s*login\s*\(\s*['"][^'"]*@[^'"]*['"]/.test(specContent)) {
+    violations.push(
+      'Spec passes a hardcoded email address to a login call. ' +
+      'Import personas from config/personas.ts and use the typed values instead: ' +
+      '`import { personas } from \'../../../config/personas\'; ' +
+      'authPage.login(personas.patient.email, personas.patient.password)`.',
+    );
+  }
+
   return violations;
 }
 

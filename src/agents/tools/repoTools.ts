@@ -5,6 +5,14 @@ export const repoToolDefs: AgentTool[] = [
   {
     type: 'function',
     function: {
+      name: 'get_personas',
+      description: 'Get config/personas.ts — typed credential objects for all test personas (admin, doctor, patient). Use these in specs instead of hardcoding email/password strings.',
+      parameters: { type: 'object', properties: {}, required: [] },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'get_route_map',
       description: 'Get the route map from the test repo config/routes.ts — feature name to URL path.',
       parameters: { type: 'object', properties: {}, required: [] },
@@ -137,6 +145,7 @@ export const repoToolDefs: AgentTool[] = [
 
 export function createRepoToolHandlers(repoName: string): ToolHandlers {
   return {
+    get_personas: async () => await testRepo.getPersonas(repoName),
     get_route_map: async () => JSON.stringify(await testRepo.getRouteMap(repoName)),
     get_context_docs: async () => {
       const docs = await testRepo.getContextDocs(repoName);
