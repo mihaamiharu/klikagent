@@ -1,4 +1,5 @@
-import { QATask, PersonaMap } from '../types';
+import { QATask } from '../types';
+import { PersonaMap } from './personas';
 import { runQaAgent } from '../agents/qaAgent';
 import { runAgent, TokenUsage } from './ai';
 import { validateTypescriptHandler } from '../agents/tools/outputTools';
