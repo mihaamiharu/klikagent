@@ -1,0 +1,74 @@
+name: KlikAgent Trigger
+
+on:
+  issues:
+    types: [labeled]
+
+jobs:
+  trigger:
+    # Fire only when the klikagent label is added — prevents double-trigger on re-label
+    if: github.event.label.name == 'klikagent'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Parse issue and call POST /tasks
+        uses: actions/github-script@v7
+        env:
+          KLIKAGENT_URL: ${{ secrets.KLIKAGENT_URL }}
+        with:
+          script: |
+            const body = context.payload.issue.body ?? '';
+
+            function parseField(label) {
+              const match = body.match(new RegExp(`### ${label}\\s*\\n+([^#]+?)\\s*(?:\\n###|$)`, 'is'));
+              return match ? match[1].trim() : null;
+            }
+
+            const description = parseField('Acceptance Criteria');
+            const feature     = parseField('Feature');
+            const qaEnvUrl    = parseField('QA Environment URL');
+            const outputRepo  = parseField('Output Repo');
+
+            const missing = ['description', 'feature', 'qaEnvUrl', 'outputRepo']
+              .filter(k => !({ description, feature, qaEnvUrl, outputRepo })[k]);
+
+            if (missing.length) {
+              core.setFailed(`Missing required fields in issue body: ${missing.join(', ')}`);
+              return;
+            }
+
+            const taskId = String(context.payload.issue.number);
+            const title  = context.payload.issue.title.replace(/^\[QA\]\s*/i, '').trim();
+
+            const payload = {
+              taskId,
+              title,
+              description,
+              qaEnvUrl,
+              outputRepo,
+              feature,
+              callbackUrl: `${process.env.KLIKAGENT_URL}/tasks/${taskId}/results`,
+              metadata: {
+                issueUrl:    context.payload.issue.html_url,
+                senderLogin: context.payload.sender.login,
+              },
+            };
+
+            const res = await fetch(`${process.env.KLIKAGENT_URL}/tasks`, {
+              method:  'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body:    JSON.stringify(payload),
+            });
+
+            if (!res.ok) {
+              const text = await res.text();
+              core.setFailed(`KlikAgent returned ${res.status}: ${text}`);
+              return;
+            }
+
+            await github.rest.issues.createComment({
+              owner:        context.repo.owner,
+              repo:         context.repo.repo,
+              issue_number: context.payload.issue.number,
+              body: `🤖 **KlikAgent received this task** (task ID: \`${taskId}\`)\n\nGenerating a Playwright spec for **${feature}** against \`${qaEnvUrl}\`. A PR will be opened in \`${outputRepo}\` when done.`,
+            });
