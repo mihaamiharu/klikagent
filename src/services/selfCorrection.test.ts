@@ -47,6 +47,10 @@ jest.mock('./ai', () => ({
   runAgent: jest.fn(),
 }));
 
+jest.mock('./personas', () => ({
+  getPersonas: jest.fn().mockResolvedValue({}),
+}));
+
 // ─── Imports after mocks ────────────────────────────────────────────────────
 
 import * as testRepoClone from './testRepoClone';

@@ -102,9 +102,15 @@ async function handleNavigate(args: Record<string, unknown>): Promise<string> {
 
   try {
     if (!sessionActive) {
-      // Open a blank session first so we can inject auth state before navigating
+      // Ensure the playwright-cli workspace is initialized (creates chromium config if absent).
+      // Without this, playwright-cli defaults to the 'chrome' channel which may not be installed.
+      await cli('install');
+
       log('INFO', `[BrowserTools] Opening new browser session`);
-      await cli('open');
+      const openResult = await cli('open');
+      if (openResult.includes('Error:') || openResult.includes('is not found')) {
+        return JSON.stringify({ error: 'BROWSER_ERROR', message: `Failed to open browser session: ${openResult}` });
+      }
       sessionActive = true;
 
       // Auto-load saved auth state for the persona, if available

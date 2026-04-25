@@ -46,7 +46,7 @@ After navigating with a loaded state, check the snapshot URL:
 3. For observed-but-not-interacted elements, call browser_generate_locator(ref)
 4. Never invent locators — every locator must come from generatedCode or browser_generate_locator
 5. On error: call browser_snapshot() to see current state and try again with a fresh ref
-6. CRITICAL — never simplify scoped locators: if browser_generate_locator returns a chained locator (e.g. getByRole('complementary').getByText('Jane Doe')), use it verbatim in the POM — never drop the parent scope. A scoped result means the inner locator alone matches multiple elements and will cause a Playwright strict mode violation at runtime.
+6. CRITICAL — never simplify scoped locators: if browser_generate_locator returns a chained locator (e.g. getByRole('complementary').getByRole('button', { name: 'Submit' })), use it verbatim in the POM — never drop the parent scope. A scoped result means the inner locator alone matches multiple elements and will cause a Playwright strict mode violation at runtime.
 
 ## Advanced browser_command reference
 Use browser_command(args) for anything beyond basic navigation and interaction.
@@ -99,8 +99,10 @@ Tabs:
   - Use authPage.emailInput.fill(email) NOT page.getByTestId('email-input').fill(email)
   - Use authPage.login(email, password) NOT a chain of fill() + click() calls
   - Use authPage.expectLoginSuccess() NOT a manual expect block
-- CRITICAL — Strict mode: Ensure locators are strictly scoped. If a locator matches multiple elements (strict mode violation), you MUST chain locators (e.g., \`page.getByRole('complementary').getByText('Jane Doe')\`) to ensure uniqueness.
-- NEVER hardcode persona names (e.g. "Jane Doe", "Jane") in your specs or POMs. Use properties from the imported \`personas\` object.
+- CRITICAL — Strict mode: Ensure locators are strictly scoped. If a locator matches multiple elements (strict mode violation), you MUST chain locators (e.g., \`page.getByRole('complementary').getByRole('button', { name: 'Submit' })\`) to ensure uniqueness.
+- NEVER hardcode persona names (e.g. "Jane Doe", "Jane") or roles in your specs or POMs. Use properties from the imported \`personas\` object. If you observe a persona name or role in a locator during exploration, you MUST create a dynamic parameterized POM method instead of a static locator property. Example:
+  BAD:  this.userName = page.getByText('Jane Doe');
+  GOOD: async expectUserProfile(name: string, role: string) { await expect(this.page.getByRole('complementary').getByText(name)).toBeVisible(); }
 - If you define a method in your POM (e.g. login(), fillLoginForm(), submitLogin(), expectOnLoginPage()), you MUST call it in your tests. Unused POM methods indicate the POM was not properly integrated.
 
 ## Tagging and reporting
