@@ -13,6 +13,7 @@ export interface SelfCorrectionResult {
   specContent: string;
   poms: Array<{ pomContent: string; pomPath: string }>;
   affectedPaths: string;
+  fixtureUpdate?: string;
   tokenUsage: TokenUsage;
   warned: boolean;        // true if tsc still failing after all attempts
   warningMessage?: string;
@@ -59,6 +60,7 @@ export async function runWithSelfCorrection(
   let specContent = qaResult.enrichedSpec;
   const poms = qaResult.poms;
   const affectedPaths = qaResult.affectedPaths;
+  const fixtureUpdate = qaResult.fixtureUpdate;
   let tokenUsage = qaResult.tokenUsage;
 
   // Step 2: TypeScript validation loop — up to maxAttempts corrections
@@ -72,7 +74,7 @@ export async function runWithSelfCorrection(
     if (tsResult.valid) {
       log('INFO', `[selfCorrection] TypeScript valid${attempt > 1 ? ` after ${attempt - 1} correction(s)` : ''}`);
       dashboardBus.emitEvent('validation', 'info', 'TypeScript is valid', { valid: true });
-      return { feature, specContent, poms, affectedPaths, tokenUsage, warned: false };
+      return { feature, specContent, poms, affectedPaths, fixtureUpdate, tokenUsage, warned: false };
     }
 
     log('WARN', `[selfCorrection] TypeScript errors on attempt ${attempt}/${maxAttempts}: ${JSON.stringify(tsResult.errors)}`);
@@ -101,11 +103,11 @@ export async function runWithSelfCorrection(
 
   if (finalResult.valid) {
     log('INFO', `[selfCorrection] TypeScript valid after ${maxAttempts} correction(s)`);
-    return { feature, specContent, poms, affectedPaths, tokenUsage, warned: false };
+    return { feature, specContent, poms, affectedPaths, fixtureUpdate, tokenUsage, warned: false };
   }
 
   const errorSummary = finalResult.errors.map((e) => `Line ${e.line}: ${e.message}`).join('\n');
   const warningMessage = `TypeScript still failing after ${maxAttempts} attempt(s):\n${errorSummary}`;
   log('WARN', `[selfCorrection] ${warningMessage}`);
-  return { feature, specContent, poms, affectedPaths, tokenUsage, warned: true, warningMessage };
+  return { feature, specContent, poms, affectedPaths, fixtureUpdate, tokenUsage, warned: true, warningMessage };
 }

@@ -57,6 +57,8 @@ On locator failure: tool returns error JSON with a hint. Call browser_snapshot()
 - Consider using allure for enhanced reporting: allure.feature(), allure.story(), allure.severity(), allure.step()
 
 ## POM rules
+- ALWAYS import 'expect' from '@playwright/test' in any POM that uses assertions:
+  import { Page, Locator, expect } from '@playwright/test';
 - POM file goes in: pages/{feature}/{ClassName}.ts  where {feature} is given explicitly in your task
 - NEVER use "general" as a feature folder — it does not exist in this repo and will cause an import error
 - NEVER invent a feature folder name. Only use feature names already present in fixtures/index.ts imports or in the pages/ directory listing from list_available_poms
@@ -64,13 +66,27 @@ On locator failure: tool returns error JSON with a hint. Call browser_snapshot()
 - Use relative imports only
 - If the feature requires multiple POMs (e.g. one for a page and one for a sub-component), put all of them in the poms array in done()
 
+## Fixture registration
+After writing a new POM, you MUST register it in fixtures/index.ts and pass the updated file as fixtureUpdate in done(). Steps:
+1. Read the current fixtures/index.ts content from get_fixtures
+2. Add an import for each new POM class at the top: import { ClassName } from '../pages/{feature}/ClassName';
+3. Extend the base fixture with the new POM:
+   const test = base.extend<{ fixtureName: ClassName }>({
+     fixtureName: async ({ page }, use) => { await use(new ClassName(page)); },
+   });
+4. Ensure export { test, expect } remains at the bottom
+5. Pass the full updated fixtures/index.ts content as fixtureUpdate in done()
+6. Update your spec to use the fixture parameter directly instead of constructing the POM in beforeEach:
+   test('...', async ({ fixtureName }) => { ... })  NOT  let pom; beforeEach(() => { pom = new ... })
+- Only omit fixtureUpdate if the POM was already registered (visible in get_fixtures output)
+
 ## Playwright API rules (violations will be caught by validate_typescript)
 - NEVER use expect(...).or() - this method does not exist on expect. Use locator.or(): locator1.or(locator2), or use a regex: expect(el).toContainText(/value1|value2/)
 - NEVER chain .or() after expect(...).toContainText(...) or any other expect assertion
 - locator.or(other) works ONLY on Locator objects, not on expect results
 
 ## CRITICAL: validate_typescript and done() protocol
-- Call validate_typescript ONCE after writing your spec and POM(s)
+- Call validate_typescript on EACH POM file separately, then on the spec — do not skip POM validation
 - If validation returns errors: fix them, then call validate_typescript again
 - If validation returns {"valid":true,"errors":[]}: call done() IMMEDIATELY on the next tool call — do NOT write more code or re-validate again
 - After validation passes, the ONLY acceptable next tool call is done()
@@ -139,7 +155,7 @@ export async function runQaAgent(
   task: QATask,
   branch: string,
   repoName: string,
-): Promise<{ feature: string; enrichedSpec: string; poms: Array<{ pomContent: string; pomPath: string }>; affectedPaths: string; tokenUsage: TokenUsage }> {
+): Promise<{ feature: string; enrichedSpec: string; poms: Array<{ pomContent: string; pomPath: string }>; affectedPaths: string; fixtureUpdate?: string; tokenUsage: TokenUsage }> {
   const { args, tokenUsage } = await runAgent(
     SYSTEM_PROMPT,
     buildUserMessage(task, branch),
@@ -151,6 +167,7 @@ export async function runQaAgent(
     enrichedSpec: args.enrichedSpec as string,
     poms: args.poms as Array<{ pomContent: string; pomPath: string }>,
     affectedPaths: args.affectedPaths as string,
+    fixtureUpdate: args.fixtureUpdate as string | undefined,
     tokenUsage,
   };
 }
