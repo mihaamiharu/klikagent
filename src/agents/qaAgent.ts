@@ -95,10 +95,12 @@ Tabs:
 - Import POM classes only when you are the one creating that POM in this task, or when it appears in list_available_poms. NEVER import a POM that does not exist.
 - The pomPath field must be the repo-relative path matching the exported class name exactly e.g. "pages/auth/AuthPage.ts"
 - The affectedPaths field should list test folders impacted by this task
-- CRITICAL — POM method usage: AFTER writing your POM, you MUST use its methods in the spec. Do NOT re-select elements with page.getByTestId() or page.locator() when a POM property or method exists. For example:
+- CRITICAL — POM method usage: You MUST use the POM for ALL interactions. NEVER use \`page.locator\` or \`page.getBy*\` directly in the spec file to click, fill, or interact. Define these as properties/methods in your POM and call them from the spec. For example:
   - Use authPage.emailInput.fill(email) NOT page.getByTestId('email-input').fill(email)
   - Use authPage.login(email, password) NOT a chain of fill() + click() calls
   - Use authPage.expectLoginSuccess() NOT a manual expect block
+- CRITICAL — Strict mode: Ensure locators are strictly scoped. If a locator matches multiple elements (strict mode violation), you MUST chain locators (e.g., \`page.getByRole('complementary').getByText('Jane Doe')\`) to ensure uniqueness.
+- NEVER hardcode persona names (e.g. "Jane Doe", "Jane") in your specs or POMs. Use properties from the imported \`personas\` object.
 - If you define a method in your POM (e.g. login(), fillLoginForm(), submitLogin(), expectOnLoginPage()), you MUST call it in your tests. Unused POM methods indicate the POM was not properly integrated.
 
 ## Tagging and reporting
