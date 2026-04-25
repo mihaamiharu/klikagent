@@ -13,6 +13,21 @@ type Pom = { pomContent: string; pomPath: string };
 function checkSpecConventions(specContent: string): string[] {
   const violations: string[] = [];
 
+  if (/(?<!expect\(\s*)page\.(?:locator|getBy(?:Role|Text|Label|Placeholder|AltText|Title|TestId))\b/.test(specContent)) {
+    violations.push(
+      'Spec contains direct `page.locator` or `page.getBy*` calls outside of assertions. ' +
+      'All element interactions MUST be encapsulated within a Page Object Model (POM). ' +
+      'Add properties or methods to your POM and use them in the spec instead (e.g. `await authPage.emailInput.fill(email)` NOT `await page.getByLabel("Email").fill(email)`).'
+    );
+  }
+
+  if (/(?:Welcome back,?\s*)?(?:Jane\s*Doe|John\s*Smith|Jane|John)/i.test(specContent)) {
+    violations.push(
+      'Spec contains hardcoded persona names (like "Jane Doe"). ' +
+      'Assertions must be persona-agnostic or use dynamic data from the `personas` object.'
+    );
+  }
+
   if (/new \w+Page\(page\)/.test(specContent)) {
     violations.push(
       'Spec constructs a POM manually with `new PageClass(page)`. ' +
