@@ -222,6 +222,7 @@ export async function runQaAgent(
     buildUserMessage(task, branch),
     qaTools,
     createQaHandlers(repoName),
+    { maxIterations: 80 },
   );
   return {
     feature: args.feature as string,

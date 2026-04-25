@@ -75,7 +75,7 @@ class RunStore {
     }
   }
 
-  public startRun(id: string, taskId: string, title: string, type: Run['type'] = 'qa-spec') {
+  public startRun(id: string, taskId: string, title: string, type: Run['type'] = 'qa-spec', metadata?: Record<string, unknown>) {
     const run: Run = {
       id,
       taskId,
@@ -83,6 +83,7 @@ class RunStore {
       status: 'running',
       title,
       startedAt: new Date().toISOString(),
+      metadata,
       events: []
     };
     this.runs.set(id, run);

@@ -31,7 +31,7 @@ app.post('/tasks', (req: Request, res: Response) => {
   log('INFO', `POST /tasks — task=${task.taskId} title="${task.title}"`);
   res.status(202).json({ received: true, taskId: task.taskId });
 
-  runStore.startRun(task.taskId, task.taskId, task.title, 'qa-spec');
+  runStore.startRun(task.taskId, task.taskId, task.title, 'qa-spec', { task });
   dashboardBus.withRunId(task.taskId, () => {
     orchestrate(task).then(() => {
       runStore.endRun(task.taskId, 'success');
