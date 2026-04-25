@@ -327,7 +327,7 @@ async function handleClick(args: Record<string, unknown>): Promise<string> {
 
   log('INFO', `[BrowserTools] Clicking: ${selector}`);
   try {
-    await page.locator(selector).first().click({ timeout: 10_000 });
+    await locatorFromSelector(page, selector).first().click({ timeout: 10_000 });
 
     // Wait for any navigation or network activity to settle
     await page.waitForTimeout(500);
@@ -349,7 +349,7 @@ async function handleFill(args: Record<string, unknown>): Promise<string> {
 
   log('INFO', `[BrowserTools] Filling "${selector}" with "${value}"`);
   try {
-    await page.locator(selector).first().fill(value, { timeout: 10_000 });
+    await locatorFromSelector(page, selector).first().fill(value, { timeout: 10_000 });
     // Return a snapshot so the agent can see the result of the fill
     return await takeSnapshot(page);
   } catch (err) {
