@@ -31,7 +31,7 @@ No HMAC signature validation — the server uses `express.json()`.
 
 | Label | Behaviour |
 |---|---|
-| `status:ready-for-qa` | Trigger `generateQaSpecFlow` |
+| `klikagent` | Trigger `generateQaSpecFlow` |
 | `status:in-progress` | No-op |
 | `scope:web` / `scope:api` / `scope:both` | Controls whether Playwright crawl runs |
 | `scope:none` | Skip entirely |
@@ -104,7 +104,7 @@ curl -X POST http://localhost:3000/tasks \
     "description": "## Acceptance Criteria\nGiven a user When they submit invalid credentials Then they see an error message",
     "qaEnvUrl": "https://your-qa-environment.com",
     "outputRepo": "owner/klikagent-tests",
-    "labels": ["status:ready-for-qa", "scope:web"]
+    "labels": ["klikagent", "scope:web"]
   }'
 
 # Review Agent — POST /reviews
