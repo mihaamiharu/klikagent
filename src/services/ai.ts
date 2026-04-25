@@ -29,16 +29,7 @@ async function callWithRetry(
   throw new Error('[AI] unreachable');
 }
 
-function makeClient(model: string): OpenAI {
-  if (model.toLowerCase().includes('gemini')) {
-    const apiKey = process.env.GEMINI_API_KEY || process.env.AI_API_KEY;
-    if (!apiKey) throw new Error('GEMINI_API_KEY or AI_API_KEY env var is not set');
-    return new OpenAI({
-      apiKey,
-      baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai/'
-    });
-  }
-
+function makeClient(): OpenAI {
   const apiKey = process.env.AI_API_KEY;
   const baseURL = process.env.AI_BASE_URL;
   if (!apiKey) throw new Error('AI_API_KEY env var is not set');
@@ -52,11 +43,9 @@ export interface RunAgentOptions {
   maxIterations?: number;
 }
 
-// Pricing (per 1M tokens)
-const MINIMAX_PROMPT_COST_PER_M = 5;
-const MINIMAX_COMPLETION_COST_PER_M = 10;
-const GEMINI_FLASH_PROMPT_COST_PER_M = 0.075;
-const GEMINI_FLASH_COMPLETION_COST_PER_M = 0.30;
+// MiniMax M2.7 pricing (per 1M tokens) — update if model changes
+const PROMPT_COST_PER_M = 5;    // USD per 1M prompt tokens
+const COMPLETION_COST_PER_M = 10; // USD per 1M completion tokens
 
 export interface TokenUsage {
   promptTokens: number;
@@ -65,20 +54,9 @@ export interface TokenUsage {
   costUSD: number;
 }
 
-function computeCost(model: string, promptTokens: number, completionTokens: number): number {
-  let promptRate = MINIMAX_PROMPT_COST_PER_M;
-  let completionRate = MINIMAX_COMPLETION_COST_PER_M;
-
-  if (model.toLowerCase().includes('gemini-2.5-flash')) {
-    promptRate = GEMINI_FLASH_PROMPT_COST_PER_M;
-    completionRate = GEMINI_FLASH_COMPLETION_COST_PER_M;
-  } else if (model.toLowerCase().includes('gemini-2.5-pro')) {
-    promptRate = 1.25;
-    completionRate = 5.00;
-  }
-
-  return (promptTokens / 1_000_000) * promptRate
-    + (completionTokens / 1_000_000) * completionRate;
+function computeCost(promptTokens: number, completionTokens: number): number {
+  return (promptTokens / 1_000_000) * PROMPT_COST_PER_M
+    + (completionTokens / 1_000_000) * COMPLETION_COST_PER_M;
 }
 
 export interface AgentRunResult {
@@ -86,7 +64,7 @@ export interface AgentRunResult {
   tokenUsage: TokenUsage;
 }
 
-// Provider-agnostic agent tool loop using OpenAI-compatible API.
+// Provider-agnostic agent tool loop using OpenAI-compatible API (works with Minimax).
 // Runs until the agent calls done(), then returns done()'s parsed arguments plus token usage.
 export async function runAgent(
   systemPrompt: string,
@@ -95,8 +73,8 @@ export async function runAgent(
   toolHandlers: ToolHandlers,
   options: RunAgentOptions = {}
 ): Promise<AgentRunResult> {
-  const model = options.model ?? process.env.AI_MODEL ?? 'gemini-2.5-flash';
-  const client = makeClient(model);
+  const client = makeClient();
+  const model = options.model ?? process.env.AI_MODEL ?? 'MiniMax-M2.7';
   const maxTokens = options.maxTokens ?? Number(process.env.AI_MAX_TOKENS ?? 32768);
   const maxIterations = options.maxIterations ?? DEFAULT_MAX_ITERATIONS;
 
@@ -186,7 +164,7 @@ export async function runAgent(
           promptTokens,
           completionTokens,
           totalTokens: promptTokens + completionTokens,
-          costUSD: computeCost(model, promptTokens, completionTokens),
+          costUSD: computeCost(promptTokens, completionTokens),
         };
         log('INFO', `[AI] tokens used — prompt: ${promptTokens}, completion: ${completionTokens}, total: ${tokenUsage.totalTokens}, cost: $${tokenUsage.costUSD.toFixed(4)}`);
         dashboardBus.emitEvent('agent', 'info', 'AI Token Usage', { tokenUsage });
