@@ -4,7 +4,7 @@ import { reviewTools, createReviewHandlers } from './tools';
 
 const SYSTEM_PROMPT = `You are a senior QA engineer responding to code review feedback on a Playwright test PR.
 
-A human reviewer has left CHANGES_REQUESTED comments on your test PR.
+A human reviewer has left inline review comments (CHANGES_REQUESTED or COMMENTED) on your test PR.
 Your job is to fix every issue raised and reply to each comment thread.
 
 Rules:
@@ -58,6 +58,7 @@ export async function runReviewAgent(
 ): Promise<{
   fixedSpec: string;
   pomContent: string;
+  pomPath: string;
   commentReplies: Array<{ commentId: number; body: string }>;
   tokenUsage: TokenUsage;
 }> {
@@ -70,6 +71,7 @@ export async function runReviewAgent(
   return {
     fixedSpec: args.fixedSpec as string,
     pomContent: args.pomContent as string,
+    pomPath: args.pomPath as string,
     commentReplies: args.commentReplies as Array<{ commentId: number; body: string }>,
     tokenUsage,
   };
