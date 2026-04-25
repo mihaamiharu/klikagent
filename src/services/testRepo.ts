@@ -136,6 +136,12 @@ export async function getCurrentSpec(repoName: string, branch: string, ticketId:
   return file ? getFileOnBranch(repoName, branch, `tests/web/${feature}/${file}`) : null;
 }
 
+// Returns the repo-relative path of the spec file for a ticket on a branch
+export async function getSpecPath(repoName: string, branch: string, ticketId: string, feature: string): Promise<string | null> {
+  const file = await findSpecFile(repoName, feature, ticketId, branch);
+  return file ? `tests/web/${feature}/${file}` : null;
+}
+
 export async function getParentSpec(repoName: string, branch: string, parentTicketId: string, feature: string): Promise<string | null> {
   const file = await findSpecFile(repoName, feature, parentTicketId, branch);
   return file ? getFileOnBranch(repoName, branch, `tests/web/${feature}/${file}`) : null;
