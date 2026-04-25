@@ -46,6 +46,7 @@ After navigating with a loaded state, check the snapshot URL:
 3. For observed-but-not-interacted elements, call browser_generate_locator(ref)
 4. Never invent locators — every locator must come from generatedCode or browser_generate_locator
 5. On error: call browser_snapshot() to see current state and try again with a fresh ref
+6. CRITICAL — never simplify scoped locators: if browser_generate_locator returns a chained locator (e.g. getByRole('complementary').getByText('Jane Doe')), use it verbatim in the POM — never drop the parent scope. A scoped result means the inner locator alone matches multiple elements and will cause a Playwright strict mode violation at runtime.
 
 ## Advanced browser_command reference
 Use browser_command(args) for anything beyond basic navigation and interaction.
