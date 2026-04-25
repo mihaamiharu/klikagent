@@ -46,7 +46,10 @@ async function cli(...args: string[]): Promise<string> {
   const fullArgs = ['-s', SESSION_ID, ...args];
   log('INFO', `[BrowserTools] playwright-cli ${fullArgs.join(' ')}`);
   try {
-    const { stdout, stderr } = await execFileAsync('playwright-cli', fullArgs, { timeout: 30_000 });
+    const { stdout, stderr } = await execFileAsync('playwright-cli', fullArgs, {
+      timeout: 30_000,
+      env: { ...process.env, PATH: `${process.cwd()}/node_modules/.bin:${process.env.PATH}` },
+    });
     return (stdout || stderr).trim();
   } catch (err: unknown) {
     const e = err as { stdout?: string; stderr?: string; message?: string };
