@@ -2,6 +2,8 @@ import express, { Request, Response, NextFunction } from 'express';
 import * as path from 'path';
 import { dashboardBus, DashboardEvent } from './eventBus';
 import { runStore } from './runStore';
+import { orchestrate } from '../orchestrator';
+import { QATask } from '../types';
 
 export const dashboardRoutes = express.Router();
 
@@ -52,6 +54,39 @@ dashboardRoutes.get('/api/runs/:id', (req, res) => {
     return res.status(404).json({ error: 'Run not found' });
   }
   res.json(run);
+});
+
+dashboardRoutes.post('/api/runs/:id/retry', (req: Request, res: Response) => {
+  const run = runStore.getRun(req.params.id);
+  if (!run) {
+    res.status(404).json({ error: 'Run not found' });
+    return;
+  }
+  if (run.type !== 'qa-spec') {
+    res.status(400).json({ error: 'Only qa-spec runs can be retried' });
+    return;
+  }
+  if (run.status !== 'failed') {
+    res.status(400).json({ error: 'Only failed runs can be retried' });
+    return;
+  }
+  const task = run.metadata?.task as QATask | undefined;
+  if (!task) {
+    res.status(400).json({ error: 'Run has no stored task payload (was created before retry support was added)' });
+    return;
+  }
+
+  const retryId = `${task.taskId}-retry-${Date.now()}`;
+  res.status(202).json({ received: true, retryId });
+
+  runStore.startRun(retryId, task.taskId, task.title, 'qa-spec', { task });
+  dashboardBus.withRunId(retryId, () => {
+    orchestrate(task).then(() => {
+      runStore.endRun(retryId, 'success');
+    }).catch((err: Error) => {
+      runStore.endRun(retryId, 'failed');
+    });
+  });
 });
 
 // ─── SSE Streaming ────────────────────────────────────────────────────────────
