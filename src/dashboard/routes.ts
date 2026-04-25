@@ -3,7 +3,9 @@ import * as path from 'path';
 import { dashboardBus, DashboardEvent } from './eventBus';
 import { runStore } from './runStore';
 import { orchestrate } from '../orchestrator';
-import { QATask } from '../types';
+import { QATask, CiTestFailure } from '../types';
+import { runWithCiFailureFix } from '../services/selfCorrection';
+import { commitFile } from '../services/github';
 
 export const dashboardRoutes = express.Router();
 
@@ -86,6 +88,56 @@ dashboardRoutes.post('/api/runs/:id/retry', (req: Request, res: Response) => {
     }).catch((err: Error) => {
       runStore.endRun(retryId, 'failed');
     });
+  });
+});
+
+dashboardRoutes.post('/api/runs/:id/fix', (req: Request, res: Response) => {
+  const run = runStore.getRun(req.params.id);
+  if (!run) {
+    res.status(404).json({ error: 'Run not found' });
+    return;
+  }
+  const task = run.metadata?.task as QATask | undefined;
+  if (!task) {
+    res.status(400).json({ error: 'Run has no stored task payload (was created before fix support was added)' });
+    return;
+  }
+
+  const { branch, feature, failures } = req.body as {
+    branch?: string;
+    feature?: string;
+    failures?: CiTestFailure[];
+  };
+  if (!branch || !feature || !failures?.length) {
+    res.status(400).json({ error: 'branch, feature, and failures[] are required' });
+    return;
+  }
+
+  const fixId = `${task.taskId}-fix-${Date.now()}`;
+  res.status(202).json({ received: true, fixId });
+
+  runStore.startRun(fixId, task.taskId, task.title, 'qa-spec', { task });
+  dashboardBus.withRunId(fixId, async () => {
+    try {
+      const result = await runWithCiFailureFix(task, branch, feature, failures);
+
+      if (result.specPath && result.specContent) {
+        await commitFile(
+          task.outputRepo, branch, result.specPath, result.specContent,
+          `fix(spec): address CI failures for #${task.taskId} [klikagent]`,
+        );
+      }
+      for (const { pomContent, pomPath } of result.poms) {
+        await commitFile(
+          task.outputRepo, branch, pomPath, pomContent,
+          `fix(pom): update ${feature} POM for #${task.taskId} [klikagent]`,
+        );
+      }
+
+      runStore.endRun(fixId, 'success');
+    } catch (err) {
+      runStore.endRun(fixId, 'failed');
+    }
   });
 });
 

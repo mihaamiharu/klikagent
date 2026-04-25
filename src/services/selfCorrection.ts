@@ -1,4 +1,4 @@
-import { QATask } from '../types';
+import { QATask, CiTestFailure } from '../types';
 import { PersonaMap } from './personas';
 import { runQaAgent } from '../agents/qaAgent';
 import { runAgent, TokenUsage } from './ai';
@@ -9,6 +9,7 @@ import { log } from '../utils/logger';
 import { dashboardBus } from '../dashboard/eventBus';
 import { AgentTool } from '../types';
 import { getPersonas } from './personas';
+import { getCurrentSpec, getCurrentPOM, getSpecPath } from './testRepo';
 
 type Pom = { pomContent: string; pomPath: string };
 
@@ -281,4 +282,132 @@ export async function runWithSelfCorrection(
   const warningMessage = `TypeScript still failing after ${maxAttempts} attempt(s):\n${errorSummary}`;
   log('WARN', `[selfCorrection] ${warningMessage}`);
   return { feature, specContent, poms, affectedPaths, fixtureUpdate, tokenUsage, warned: true, warningMessage };
+}
+
+// ─── CI failure fix ────────────────────────────────────────────────────────────
+
+const CI_FIX_SYSTEM_PROMPT = `You are a senior QA engineer fixing Playwright test failures.
+
+You receive the exact CI failure output (with Expected/Received values), the current spec, and the current POM.
+Your job is to fix only the failing assertions — do not rewrite passing tests.
+
+## What to do for each failure
+
+### Wrong assertion text (Expected X, Received Y)
+Navigate to the page, observe the actual heading/text in the snapshot, update the POM method to match.
+
+### Strict mode violation (locator resolved to N elements)
+Navigate to the page, call browser_generate_locator(ref) on the specific element,
+use the returned scoped locator in the POM. Never invent a regex or text-based locator.
+
+### Element not found / Timeout
+Navigate to the page, verify whether the element exists at all.
+If yes, get its correct locator via browser_generate_locator(ref).
+If the element genuinely doesn't exist (e.g. admin page has no welcome heading), remove that assertion.
+
+## Browser tools
+- browser_navigate(url, persona) to open a URL with saved auth state
+- browser_snapshot() to see the current DOM
+- browser_click(ref) / browser_fill(ref, value) to interact — use element refs (e1, e2, ...) from the snapshot
+- browser_generate_locator(ref) to get the exact Playwright locator for an element
+- browser_eval(expression, ref) to read attributes not visible in the snapshot
+- browser_close() when done exploring
+
+## Locator rules
+- Every locator must come from browser_generate_locator or generatedCode — never invent selectors
+- CRITICAL: use scoped locators verbatim — e.g. getByRole('complementary').getByText('Jane Doe') — never simplify
+- Never hardcode persona strings in the POM. Accept names/roles as method parameters.
+
+## Done protocol
+1. Call validate_typescript on the fixed spec
+2. If valid, call done() immediately — do NOT make any other tool calls after validation passes
+3. In done(): fixedSpec = corrected spec, fixedPoms = array of {pomContent, pomPath} for each changed POM`;
+
+export interface CiFixResult {
+  specContent: string;
+  poms: Pom[];
+  specPath: string | null;
+  tokenUsage: TokenUsage;
+}
+
+const MAX_CI_FAILURES = 5;
+const MAX_ERROR_LINES = 25;
+
+// Keep only the meaningful part of a Playwright error — strip full stack traces.
+// The Expected/Received block and the immediate assertion location are enough.
+function trimFailureMessage(msg: string): string {
+  const lines = msg.split('\n');
+  // Cut at "at " stack frame lines — everything from the first pure stack frame is noise
+  const stackStart = lines.findIndex((l) => /^\s+at /.test(l));
+  const trimmed = stackStart > 0 ? lines.slice(0, stackStart) : lines;
+  return trimmed.slice(0, MAX_ERROR_LINES).join('\n').trim();
+}
+
+// Group failures by their root error pattern. When multiple tests share the
+// same Expected/Received cause, only the first representative is needed.
+function deduplicateFailures(failures: CiTestFailure[]): CiTestFailure[] {
+  const seen = new Set<string>();
+  return failures.filter((f) => {
+    const key = f.errorMessage.split('\n').find((l) => l.includes('Error:') || l.includes('Expected'))?.trim() ?? f.errorMessage.slice(0, 80);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+export async function runWithCiFailureFix(
+  task: QATask,
+  branch: string,
+  feature: string,
+  failures: CiTestFailure[],
+): Promise<CiFixResult> {
+  const repoName = task.outputRepo;
+
+  const deduplicated = deduplicateFailures(failures).slice(0, MAX_CI_FAILURES);
+  log('INFO', `[ciFailureFix] Fixing ${deduplicated.length} unique failure(s) (${failures.length} total) on branch ${branch}`);
+  dashboardBus.emitEvent('correction', 'info', `Fixing ${deduplicated.length} CI failure(s)`, { branch, feature, total: failures.length });
+
+  const [currentSpec, currentPom, specPath] = await Promise.all([
+    getCurrentSpec(repoName, branch, task.taskId, feature),
+    getCurrentPOM(repoName, branch, feature),
+    getSpecPath(repoName, branch, task.taskId, feature),
+  ]);
+
+  const failureSummary = deduplicated
+    .map((f, i) => `### Failure ${i + 1}: ${f.testName}\n${trimFailureMessage(f.errorMessage)}`)
+    .join('\n\n');
+
+  const pomSection = currentPom ? `## Current POM\n${currentPom}` : '## Current POM\n(none found)';
+
+  const userMessage = `## CI Failures to Fix
+
+${failureSummary}
+
+## Current Spec
+${currentSpec ?? '(spec not found on branch)'}
+
+${pomSection}
+
+## Task Context
+QA Environment: ${task.qaEnvUrl}
+Branch: ${branch}
+Feature: ${feature}
+
+Navigate to the relevant pages to verify actual values, then fix only the failing assertions.`;
+
+  const { args, tokenUsage } = await runAgent(
+    CI_FIX_SYSTEM_PROMPT,
+    userMessage,
+    fixTools,
+    createQaHandlers(repoName),
+    { maxIterations: 25 },
+  );
+
+  const fixedSpec = args.fixedSpec as string;
+  const fixedPoms = (args.fixedPoms as Pom[] | undefined) ?? [];
+
+  log('INFO', `[ciFailureFix] Fix agent completed — $${tokenUsage.costUSD.toFixed(4)} USD`);
+  dashboardBus.emitEvent('correction', 'info', 'CI failure fix applied', { tokenUsage });
+
+  return { specContent: fixedSpec, poms: fixedPoms, specPath, tokenUsage };
 }

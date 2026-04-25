@@ -13,6 +13,13 @@ export interface QATask {
   metadata?: Record<string, unknown>;  // source-specific extras (e.g. issueUrl, labels)
 }
 
+// A single test failure from a CI run — posted to POST /api/runs/:id/fix
+export interface CiTestFailure {
+  testName: string;      // full test title from Playwright output
+  errorMessage: string;  // full error including Expected/Received lines
+  filePath?: string;     // spec file path e.g. "tests/web/auth/auth-flow.spec.ts"
+}
+
 // Payload sent by CI to POST /tasks/:id/results after test run
 export interface TaskResult {
   taskId: string;
