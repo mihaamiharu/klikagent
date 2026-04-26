@@ -16,6 +16,23 @@ function seedDomainMd(domainContext: string): string {
   return `# Domain Context\n\n${domainContext}\n`;
 }
 
+function seedPersonasJson(): string {
+  return JSON.stringify({
+    admin: {
+      email: '${QA_ADMIN_EMAIL}',
+      password: '${QA_ADMIN_PASSWORD}',
+      displayName: 'Admin',
+      role: 'admin',
+    },
+    user: {
+      email: '${QA_USER_EMAIL}',
+      password: '${QA_USER_PASSWORD}',
+      displayName: 'User',
+      role: 'user',
+    },
+  }, null, 2) + '\n';
+}
+
 function seedPersonasMd(): string {
   return `# Personas\n\nDescribe the user personas for this application.\n\n## Example\n\n- **admin** — has full access to all features\n- **user** — standard user with limited access\n`;
 }
@@ -69,6 +86,7 @@ export async function provisionRepo(req: ProvisionRequest): Promise<ProvisionRes
   const seedFiles: Array<{ path: string; content: string }> = [
     { path: 'config/routes.ts',          content: seedRoutesTs(req.features) },
     { path: 'config/keywords.json',      content: seedKeywordsJson(req.features) },
+    { path: 'config/personas.json',      content: seedPersonasJson() },
     { path: 'context/domain.md',         content: seedDomainMd(req.domainContext) },
     { path: 'context/personas.md',       content: seedPersonasMd() },
     { path: 'context/test-patterns.md',  content: seedTestPatternsMd() },
