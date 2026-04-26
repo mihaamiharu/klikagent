@@ -40,6 +40,7 @@ export function authStateExists(persona: string, baseUrl?: string): boolean {
 // ─── CLI runner ───────────────────────────────────────────────────────────────
 
 const SESSION_ID = 'klikagent';
+const CLI_TIMEOUT = parseInt(process.env.BROWSER_CLI_TIMEOUT ?? '30000', 10);
 let sessionActive = false;
 
 async function cli(...args: string[]): Promise<string> {
@@ -47,7 +48,7 @@ async function cli(...args: string[]): Promise<string> {
   log('INFO', `[BrowserTools] playwright-cli ${fullArgs.join(' ')}`);
   try {
     const { stdout, stderr } = await execFileAsync('playwright-cli', fullArgs, {
-      timeout: 30_000,
+      timeout: CLI_TIMEOUT,
       env: { ...process.env, PATH: `${process.cwd()}/node_modules/.bin:${process.env.PATH}` },
     });
     return (stdout || stderr).trim();
