@@ -104,12 +104,42 @@ Running custom Playwright code:
 Tabs:
   ["tab-new", "https://example.com/other"]
   ["tab-list"]
-  ["tab-select", "0"]`;
+  ["tab-select", "0"]
+
+## Advanced run-code patterns
+Use browser_command(["run-code", "async page => { ... }"]) when individual tools are not enough.
+IMPORTANT: import/export/require syntax is NOT supported inside run-code functions.
+
+Permissions & geolocation:
+  ["run-code", "async page => { await page.context().grantPermissions(['geolocation']); await page.context().setGeolocation({ latitude: -6.2, longitude: 106.8 }); }"]
+  ["run-code", "async page => { await page.context().grantPermissions(['notifications', 'camera', 'microphone']); }"]
+
+Media emulation (dark mode, print layout, reduced motion):
+  ["run-code", "async page => { await page.emulateMedia({ colorScheme: 'dark' }); }"]
+  ["run-code", "async page => { await page.emulateMedia({ media: 'print' }); }"]
+  ["run-code", "async page => { await page.emulateMedia({ reducedMotion: 'reduce' }); }"]
+
+Wait strategies (use when elements load asynchronously):
+  ["run-code", "async page => { await page.waitForLoadState('networkidle', { timeout: 10000 }); }"]
+  ["run-code", "async page => { await page.waitForSelector('[data-testid=\"result\"]', { state: 'visible', timeout: 5000 }); }"]
+  ["run-code", "async page => { await page.waitForFunction(() => document.querySelectorAll('.item').length > 3); }"]
+
+Frame navigation (iframes):
+  ["run-code", "async page => { const frame = page.frameLocator('iframe[name=\"content\"]'); await frame.getByRole('button', { name: 'Submit' }).click(); }"]
+  ["run-code", "async page => { console.log(JSON.stringify(page.frames().map(f => f.url()))); }"]
+
+File downloads:
+  ["run-code", "async page => { const [download] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Download' }).click()]); console.log(await download.path()); }"]
+
+Data extraction:
+  ["run-code", "async page => { const rows = await page.$$eval('table tr', rows => rows.map(r => r.innerText)); console.log(JSON.stringify(rows)); }"]
+  ["run-code", "async page => { const meta = await page.$eval('meta[name=\"description\"]', el => el.getAttribute('content')); console.log(meta); }"]`;
 
 export const SPEC_RULES = `## Spec writing rules
 - Use ONLY locators from the page snapshots - never invent selectors
 - Prefer Playwright locators: getByRole, getByTestId, getByLabel, getByPlaceholder, getByText
 - Every test must have at least one assertion (expect)
+- Prefer these assertion matchers: toBeVisible(), toHaveText(), toHaveValue(), toBeChecked(), toMatchAriaSnapshot() — they are auto-retrying and more resilient than count or attribute checks
 - NEVER hardcode real persona credentials (email/password) in specs. Call get_personas to read config/personas.ts, then import and use it:
   import { personas } from '../../../config/personas';
   await authPage.login(personas.patient.email, personas.patient.password);

@@ -44,7 +44,7 @@ const CLI_TIMEOUT = parseInt(process.env.BROWSER_CLI_TIMEOUT ?? '30000', 10);
 let sessionActive = false;
 
 async function cli(...args: string[]): Promise<string> {
-  const fullArgs = ['-s', SESSION_ID, ...args];
+  const fullArgs = [`-s=${SESSION_ID}`, ...args];
   log('INFO', `[BrowserTools] playwright-cli ${fullArgs.join(' ')}`);
   try {
     const { stdout, stderr } = await execFileAsync('playwright-cli', fullArgs, {
@@ -179,8 +179,6 @@ async function handleGenerateLocator(args: Record<string, unknown>): Promise<str
   log('INFO', `[BrowserTools] Generating locator for ref: ${ref}`);
   try {
     const result = await cli('--raw', 'generate-locator', ref);
-    // Sanity-check: a valid locator starts with getBy*, locator(), nth(), etc.
-    // If the output looks like an error or help text, surface it clearly so the agent can fall back.
     const looksLikeLocator = /^(getBy|page\.|locator|nth\(|\.filter)/.test(result.trim());
     if (!looksLikeLocator) {
       log('WARN', `[BrowserTools] generate-locator returned unexpected output: ${result.slice(0, 100)}`);
