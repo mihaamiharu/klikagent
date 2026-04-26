@@ -41,7 +41,8 @@ export interface RunAgentOptions {
   model?: string;
   maxTokens?: number;
   maxIterations?: number;
-  // Called after each sequential tool executes. Return a new system prompt to trigger a phase
+  // Called after each tool executes — sequentially after each sequential tool, or in batch
+  // (all at once) after parallel tools complete. Return a new system prompt to trigger a phase
   // change (replaces messages[0]), or null to leave the prompt unchanged.
   onToolCall?: (toolName: string) => string | null;
 }
@@ -216,7 +217,7 @@ export async function runAgent(
 
         if (name === 'done') {
           const args = JSON.parse(toolCall.function.arguments) as Record<string, unknown>;
-          log('INFO', `[AI] tool call: done`);
+          log('INFO', '[AI] tool call: done');
           dashboardBus.emitEvent('agent', 'info', `Tool Call: done`, { toolCall: 'done', args });
           const tokenUsage: TokenUsage = {
             promptTokens,
