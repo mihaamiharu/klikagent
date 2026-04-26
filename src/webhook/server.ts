@@ -28,6 +28,12 @@ app.post('/tasks', (req: Request, res: Response) => {
     return;
   }
 
+  if (runStore.isRunActive(task.taskId)) {
+    log('WARN', `POST /tasks — task ${task.taskId} is already running. Skipping duplicate.`);
+    res.status(409).json({ error: 'Task already in progress', taskId: task.taskId });
+    return;
+  }
+
   log('INFO', `POST /tasks — task=${task.taskId} title="${task.title}"`);
   res.status(202).json({ received: true, taskId: task.taskId });
 
@@ -54,6 +60,13 @@ app.post('/reviews', (req: Request, res: Response) => {
     return;
   }
 
+  const runId = `pr-${body.prNumber}`;
+  if (runStore.isRunActive(runId)) {
+    log('WARN', `POST /reviews — PR #${body.prNumber} is already being reviewed. Skipping duplicate.`);
+    res.status(409).json({ error: 'Review already in progress', prNumber: body.prNumber });
+    return;
+  }
+
   const ctx: ReviewContext = {
     prNumber: body.prNumber,
     repo: body.outputRepo,
@@ -76,7 +89,6 @@ app.post('/reviews', (req: Request, res: Response) => {
   // Strip owner prefix from outputRepo — testRepo functions expect just the repo name
   const repoName = ctx.outputRepo.includes('/') ? ctx.outputRepo.split('/').pop()! : ctx.outputRepo;
 
-  const runId = `pr-${ctx.prNumber}`;
   runStore.startRun(runId, ctx.ticketId, `Review PR #${ctx.prNumber}`, 'review');
   dashboardBus.withRunId(runId, async () => {
     try {
@@ -125,10 +137,16 @@ app.post('/repos/provision', (req: Request, res: Response) => {
     return;
   }
 
+  const runId = `provision-${payload.repoName}`;
+  if (runStore.isRunActive(runId)) {
+    log('WARN', `POST /repos/provision — repo ${payload.repoName} is already being provisioned. Skipping duplicate.`);
+    res.status(409).json({ error: 'Provisioning already in progress', repoName: payload.repoName });
+    return;
+  }
+
   log('INFO', `POST /repos/provision — repo=${payload.owner}/${payload.repoName}`);
   res.status(202).json({ received: true, repoName: payload.repoName });
 
-  const runId = `provision-${payload.repoName}`;
   runStore.startRun(runId, payload.repoName, `Provision repo ${payload.repoName}`, 'provision');
   dashboardBus.withRunId(runId, () => {
     provisionRepo(payload).then(() => {
