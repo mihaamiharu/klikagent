@@ -22,8 +22,15 @@ const DEFAULT_PERSONAS: Record<string, PersonaSeed> = {
   patient: { email: 'jane.doe@caresync.dev', password: 'Password123!', displayName: 'Jane',      role: 'patient' },
 };
 
-function seedPersonasJson(personas?: Record<string, PersonaSeed>): string {
-  return JSON.stringify(personas ?? DEFAULT_PERSONAS, null, 2) + '\n';
+function seedPersonasTs(personas?: Record<string, PersonaSeed>): string {
+  const map = personas ?? DEFAULT_PERSONAS;
+  const entries = Object.entries(map).map(([key, val]) => {
+    const fields = Object.entries(val)
+      .map(([k, v]) => `    ${k}: '${v}'`)
+      .join(',\n');
+    return `  ${key}: {\n${fields}\n  }`;
+  });
+  return `export const personas = {\n${entries}\n} as const;\n\nexport type PersonaName = keyof typeof personas;\nexport type Persona = (typeof personas)[PersonaName];\n`;
 }
 
 function seedPersonasMd(): string {
@@ -79,7 +86,7 @@ export async function provisionRepo(req: ProvisionRequest): Promise<ProvisionRes
   const seedFiles: Array<{ path: string; content: string }> = [
     { path: 'config/routes.ts',          content: seedRoutesTs(req.features) },
     { path: 'config/keywords.json',      content: seedKeywordsJson(req.features) },
-    { path: 'config/personas.json',      content: seedPersonasJson(req.personas) },
+    { path: 'config/personas.ts',       content: seedPersonasTs(req.personas) },
     { path: 'context/domain.md',         content: seedDomainMd(req.domainContext) },
     { path: 'context/personas.md',       content: seedPersonasMd() },
     { path: 'context/test-patterns.md',  content: seedTestPatternsMd() },
