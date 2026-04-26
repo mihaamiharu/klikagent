@@ -65,12 +65,13 @@ describe('provisionRepo', () => {
     expect(result.defaultBranch).toBe('main');
   });
 
-  it('commits all 11 convention seed files', async () => {
+  it('commits all 12 convention seed files', async () => {
     await runProvision();
 
     const committedPaths = mockCommitFile.mock.calls.map((call) => call[2]);
     expect(committedPaths).toContain('config/routes.ts');
     expect(committedPaths).toContain('config/keywords.json');
+    expect(committedPaths).toContain('config/personas.json');
     expect(committedPaths).toContain('context/domain.md');
     expect(committedPaths).toContain('context/personas.md');
     expect(committedPaths).toContain('context/test-patterns.md');
@@ -80,7 +81,7 @@ describe('provisionRepo', () => {
     expect(committedPaths).toContain('utils/helpers.ts');
     expect(committedPaths).toContain('tsconfig.json');
     expect(committedPaths).toContain('playwright.config.ts');
-    expect(mockCommitFile).toHaveBeenCalledTimes(11);
+    expect(mockCommitFile).toHaveBeenCalledTimes(12);
   });
 
   it('seeds routes.ts with the provided features', async () => {
