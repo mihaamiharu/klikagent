@@ -86,9 +86,12 @@ Tabs:
 - Use ONLY locators from the page snapshots - never invent selectors
 - Prefer Playwright locators: getByRole, getByTestId, getByLabel, getByPlaceholder, getByText
 - Every test must have at least one assertion (expect)
-- NEVER hardcode email addresses or passwords in specs. Call get_personas to read config/personas.ts, then import and use it:
+- NEVER hardcode real persona credentials (email/password) in specs. Call get_personas to read config/personas.ts, then import and use it:
   import { personas } from '../../../config/personas';
   await authPage.login(personas.patient.email, personas.patient.password);
+- For negative test cases that deliberately use invalid/non-existent credentials (e.g. testing an "invalid email" error state), use a descriptive literal string:
+  await authPage.login('nonexistent@example.com', 'wrongpassword');
+  NEVER invent a personas.X key that does not exist in the personas config — personas.nonExistent is INVALID and will cause a TypeScript error.
 - ALWAYS import test and expect from the project fixture layer — NEVER from @playwright/test directly:
   import { test, expect } from '../../../fixtures';  (adjust the relative depth for the spec file location)
 - Check the get_fixtures output: if the POM you need is already registered as a fixture (e.g. authPage, doctorsPage), use it as a fixture parameter in the test function — do NOT construct it with new PageClass(page) manually
@@ -188,7 +191,7 @@ Start here: ${task.qaEnvUrl}
    IMPORTANT: read fixtures/index.ts carefully — note which POMs are registered as fixtures and use
    those fixture parameters in your tests instead of constructing page objects manually.
    IMPORTANT: use personas from get_personas (import { personas } from '../../../config/personas') —
-   never hardcode email or password strings in specs.
+   never hardcode real persona credentials. For negative tests using invalid/non-existent credentials, a literal string is correct.
 2. Call list_available_poms to see all existing page objects and available feature folders.
    Determine the correct feature name from these results and the task context.
 3. Call get_existing_pom with your determined feature to read any existing POM

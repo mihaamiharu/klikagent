@@ -2,8 +2,8 @@ import { QATask, CiTestFailure } from '../types';
 import { PersonaMap } from './personas';
 import { runQaAgent } from '../agents/qaAgent';
 import { runAgent, TokenUsage } from './ai';
-import { validateTypescriptHandler } from '../agents/tools/outputTools';
-import { qaTools, createQaHandlers } from '../agents/tools';
+import { validateTypescriptHandler, validateTypescriptTool } from '../agents/tools/outputTools';
+import { qaTools, createQaHandlers, browserHandlers } from '../agents/tools';
 import { maxSelfCorrectionAttempts } from './testRepoClone';
 import { log } from '../utils/logger';
 import { dashboardBus } from '../dashboard/eventBus';
@@ -72,13 +72,38 @@ function checkSpecConventions(specContent: string, personaMap: PersonaMap): stri
     );
   }
 
-  if (/\.\s*login\s*\(\s*['"][^'"]*@[^'"]*['"]/.test(specContent)) {
-    violations.push(
-      'Spec passes a hardcoded email address to a login call. ' +
-      'Import personas from config/personas.ts and use the typed values instead: ' +
-      '`import { personas } from \'../../../config/personas\'; ' +
-      'authPage.login(personas.patient.email, personas.patient.password)`.',
-    );
+  // Only flag hardcoded emails that match a real persona credential — not deliberate invalid-email literals
+  const knownEmails = new Set(Object.values(personaMap).map((p) => p.email));
+  const loginEmailPattern = /\.\s*login\s*\(\s*['"]([^'"]*@[^'"]*)['"]/g;
+  let loginEmailMatch: RegExpExecArray | null;
+  while ((loginEmailMatch = loginEmailPattern.exec(specContent)) !== null) {
+    const email = loginEmailMatch[1];
+    if (knownEmails.has(email)) {
+      const validKeys = Object.keys(personaMap).join(', ');
+      violations.push(
+        `Spec passes a hardcoded persona email ("${email}") to a login call. ` +
+        `Use the personas object instead: \`authPage.login(personas.patient.email, personas.patient.password)\`. ` +
+        `Valid persona keys are: ${validKeys}. ` +
+        'For negative tests with deliberately-invalid credentials, a literal like \'nonexistent@example.com\' is correct — do NOT invent a personas key.',
+      );
+      break;
+    }
+  }
+
+  // Check for invented persona keys — catches cases where the agent fabricates keys like personas.nonExistent
+  const personaKeyPattern = /personas\.(\w+)\./g;
+  let personaKeyMatch: RegExpExecArray | null;
+  while ((personaKeyMatch = personaKeyPattern.exec(specContent)) !== null) {
+    const key = personaKeyMatch[1];
+    if (!(key in personaMap)) {
+      const validKeys = Object.keys(personaMap).join(', ');
+      violations.push(
+        `Spec references \`personas.${key}\` which is not a valid persona key. ` +
+        `Valid keys are: ${validKeys}. ` +
+        `For deliberately-invalid credentials, use a string literal like 'nonexistent@example.com' instead of inventing a persona key.`,
+      );
+      break;
+    }
   }
 
   return violations;
@@ -179,7 +204,14 @@ const fixDoneTool: AgentTool = {
   },
 };
 
-const fixTools: AgentTool[] = [...qaTools.filter((t) => t.function.name !== 'done'), fixDoneTool];
+// Convention and TS fix agents only need validate_typescript + their done() — no browser tools.
+// Giving them browser tools causes them to behave like a full QA agent, re-exploring the app
+// and making it appear as though the main agent is still running after done() was called.
+const conventionOnlyTools: AgentTool[] = [validateTypescriptTool, fixConventionsDoneTool];
+const fixTools: AgentTool[] = [validateTypescriptTool, fixDoneTool];
+
+// CI fix agent DOES need browser tools — it navigates to verify actual vs expected values.
+const ciFixTools: AgentTool[] = [...qaTools.filter((t) => t.function.name !== 'done'), fixDoneTool];
 
 export async function runWithSelfCorrection(
   task: QATask,
@@ -199,6 +231,14 @@ export async function runWithSelfCorrection(
   const fixtureUpdate = qaResult.fixtureUpdate;
   let tokenUsage = qaResult.tokenUsage;
 
+  // Close any browser session left open by the QA agent — if done() was called without
+  // browser_close(), sessionActive stays true and the correction agents would inherit it.
+  try {
+    await browserHandlers.browser_close({});
+  } catch {
+    // Session may already be closed — ignore
+  }
+
   // Step 2: Convention check — catches pattern violations that tsc cannot
   const personaMap = await getPersonas(repoName, []);
   const specViolations = checkSpecConventions(specContent, personaMap);
@@ -209,15 +249,14 @@ export async function runWithSelfCorrection(
     log('WARN', `[selfCorrection] ${allViolations.length} convention violation(s) found`);
     dashboardBus.emitEvent('correction', 'warn', 'Convention violations detected', { violations: allViolations });
 
-    const conventionFixTools = [...qaTools.filter((t) => t.function.name !== 'done'), fixConventionsDoneTool];
     const violationList = allViolations.map((v, i) => `${i + 1}. ${v}`).join('\n');
     const pomSummary = poms.map((p) => `### ${p.pomPath}\n${p.pomContent}`).join('\n\n');
 
     const { args, tokenUsage: fixUsage } = await runAgent(
       'Fix the convention violations listed below in this Playwright spec and/or POM files. Fix ONLY what is listed — do not change any other logic.',
       `VIOLATIONS:\n${violationList}\n\n### Spec\n${specContent}\n\n${pomSummary}`,
-      conventionFixTools,
-      createQaHandlers(repoName),
+      conventionOnlyTools,
+      validateTypescriptHandler,
     );
 
     tokenUsage = addTokenUsage(tokenUsage, fixUsage);
@@ -259,7 +298,7 @@ export async function runWithSelfCorrection(
       'Fix the TypeScript errors in this Playwright spec. Output only the corrected spec content.',
       `TypeScript errors:\n${tsErrors}\n\nSpec:\n${specContent}`,
       fixTools,
-      createQaHandlers(repoName),
+      validateTypescriptHandler,
     );
     tokenUsage = addTokenUsage(tokenUsage, fixUsage);
     specContent = args.fixedSpec as string;
@@ -398,7 +437,7 @@ Navigate to the relevant pages to verify actual values, then fix only the failin
   const { args, tokenUsage } = await runAgent(
     CI_FIX_SYSTEM_PROMPT,
     userMessage,
-    fixTools,
+    ciFixTools,
     createQaHandlers(repoName),
     { maxIterations: 25 },
   );
