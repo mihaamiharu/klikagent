@@ -129,6 +129,11 @@ class RunStore {
     }
   }
 
+  public isRunActive(id: string): boolean {
+    const run = this.runs.get(id);
+    return run?.status === 'running';
+  }
+
   public getRun(id: string): Run | undefined {
     return this.runs.get(id);
   }

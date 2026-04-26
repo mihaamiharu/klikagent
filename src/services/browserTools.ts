@@ -17,6 +17,7 @@ import fs from 'fs';
 import path from 'path';
 import { AgentTool, ToolHandlers } from '../types';
 import { log } from '../utils/logger';
+import { dashboardBus } from '../dashboard/eventBus';
 
 const execFileAsync = promisify(execFile);
 
@@ -37,14 +38,21 @@ export function authStateExists(persona: string, baseUrl?: string): boolean {
   return fs.existsSync(authStatePath(persona, baseUrl));
 }
 
-// ─── CLI runner ───────────────────────────────────────────────────────────────
+// ─── Session management ───────────────────────────────────────────────────────
 
-const SESSION_ID = 'klikagent';
+// Track active sessions by their runId to prevent state pollution in parallel runs.
+const activeSessions = new Set<string>();
+
+function getSessionId(): string {
+  const runId = dashboardBus.getRunId();
+  return runId ? `run-${runId}` : 'klikagent-default';
+}
+
 const CLI_TIMEOUT = parseInt(process.env.BROWSER_CLI_TIMEOUT ?? '30000', 10);
-let sessionActive = false;
 
 async function cli(...args: string[]): Promise<string> {
-  const fullArgs = [`-s=${SESSION_ID}`, ...args];
+  const sessionId = getSessionId();
+  const fullArgs = [`-s=${sessionId}`, ...args];
   log('INFO', `[BrowserTools] playwright-cli ${fullArgs.join(' ')}`);
   try {
     const { stdout, stderr } = await execFileAsync('playwright-cli', fullArgs, {
@@ -94,6 +102,7 @@ async function handleNavigate(args: Record<string, unknown>): Promise<string> {
 
   const persona = args['persona'] ? String(args['persona']) : null;
   const baseUrl = process.env.QA_BASE_URL ?? 'http://localhost:3000';
+  const sessionId = getSessionId();
 
   if (/^https?:\/\/localhost(:\d+)?/.test(url)) {
     const parsed = new URL(url);
@@ -102,17 +111,16 @@ async function handleNavigate(args: Record<string, unknown>): Promise<string> {
   }
 
   try {
-    if (!sessionActive) {
-      // Ensure the playwright-cli workspace is initialized (creates chromium config if absent).
-      // Without this, playwright-cli defaults to the 'chrome' channel which may not be installed.
+    if (!activeSessions.has(sessionId)) {
+      // Ensure the playwright-cli workspace is initialized.
       await cli('install');
 
-      log('INFO', `[BrowserTools] Opening new browser session`);
+      log('INFO', `[BrowserTools] Opening new browser session: ${sessionId}`);
       const openResult = await cli('open');
       if (openResult.includes('Error:') || openResult.includes('is not found')) {
         return JSON.stringify({ error: 'BROWSER_ERROR', message: `Failed to open browser session: ${openResult}` });
       }
-      sessionActive = true;
+      activeSessions.add(sessionId);
 
       // Auto-load saved auth state for the persona, if available
       if (persona) {
@@ -166,14 +174,14 @@ async function handleSnapshot(_args: Record<string, unknown>): Promise<string> {
 }
 
 async function handleListInteractables(_args: Record<string, unknown>): Promise<string> {
-  // Alias for snapshot — playwright-cli snapshots include all interactable refs
   return buildResponse();
 }
 
 async function handleGenerateLocator(args: Record<string, unknown>): Promise<string> {
   const ref = String(args['ref'] ?? '');
+  const sessionId = getSessionId();
   if (!ref) throw new Error('browser_generate_locator: ref is required');
-  if (!sessionActive) {
+  if (!activeSessions.has(sessionId)) {
     return JSON.stringify({ error: 'BROWSER_ERROR', message: 'No active browser session — call browser_navigate first' });
   }
   log('INFO', `[BrowserTools] Generating locator for ref: ${ref}`);
@@ -213,13 +221,14 @@ async function handleCommand(args: Record<string, unknown>): Promise<string> {
 }
 
 async function handleClose(_args: Record<string, unknown>): Promise<string> {
-  log('INFO', `[BrowserTools] Closing browser session`);
+  const sessionId = getSessionId();
+  log('INFO', `[BrowserTools] Closing browser session: ${sessionId}`);
   try {
     await cli('close');
   } catch {
-    // ignore — session may already be gone
+    // ignore
   }
-  sessionActive = false;
+  activeSessions.delete(sessionId);
   return JSON.stringify({ ok: true });
 }
 
