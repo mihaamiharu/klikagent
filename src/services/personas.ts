@@ -18,20 +18,25 @@ async function fetchRawConfig(repoName: string): Promise<Record<string, Record<s
 
   const content = await getFileOnBranch(repoName, 'HEAD', 'config/personas.json');
   if (!content) {
-    log('WARN', '[personas] config/personas.json not found in test repo — returning empty config');
-    cache.set(repoName, {});
+    log('WARN', '[personas] config/personas.json not found in test repo — will retry next call');
     return {};
   }
 
+  let parsed: Record<string, Record<string, string>>;
   try {
-    const parsed = JSON.parse(content) as Record<string, Record<string, string>>;
-    cache.set(repoName, parsed);
-    return parsed;
+    parsed = JSON.parse(content) as Record<string, Record<string, string>>;
   } catch {
-    log('WARN', '[personas] config/personas.json is invalid JSON — returning empty config');
-    cache.set(repoName, {});
+    log('WARN', '[personas] config/personas.json is invalid JSON — will retry next call');
     return {};
   }
+
+  if (Object.keys(parsed).length === 0) {
+    log('WARN', '[personas] config/personas.json is empty — will retry next call');
+    return {};
+  }
+
+  cache.set(repoName, parsed);
+  return parsed;
 }
 
 function resolveEnvPlaceholders(raw: Record<string, string>): Persona {

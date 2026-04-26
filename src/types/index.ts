@@ -114,12 +114,20 @@ export type ReviewHandler = (context: ReviewContext) => Promise<void>;
 
 // ─── Repo Provisioner ─────────────────────────────────────────────────────────
 
+export interface PersonaSeed {
+  email: string;
+  password: string;
+  displayName?: string;
+  role?: string;
+}
+
 export interface ProvisionRequest {
   repoName: string;       // GitHub repo name to create e.g. "myteam-tests"
   owner: string;          // GitHub org or user
   qaEnvUrl: string;       // base URL of the QA environment (seeded into playwright.config.ts)
   features: string[];     // feature areas e.g. ["auth", "billing", "dashboard"]
   domainContext: string;  // paragraph describing the app — seeded into context/domain.md
+  personas?: Record<string, PersonaSeed>; // persona credentials seeded into config/personas.json
 }
 
 export interface ProvisionResult {
