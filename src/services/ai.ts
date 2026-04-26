@@ -41,6 +41,9 @@ export interface RunAgentOptions {
   model?: string;
   maxTokens?: number;
   maxIterations?: number;
+  // Called after each sequential tool executes. Return a new system prompt to trigger a phase
+  // change (replaces messages[0]), or null to leave the prompt unchanged.
+  onToolCall?: (toolName: string) => string | null;
 }
 
 // MiniMax M2.7 pricing (per 1M tokens) — update if model changes
@@ -62,6 +65,81 @@ function computeCost(promptTokens: number, completionTokens: number): number {
 export interface AgentRunResult {
   args: Record<string, unknown>;
   tokenUsage: TokenUsage;
+}
+
+// Tools that maintain shared browser/terminal state and must run in order.
+// Any batch containing one of these falls back to fully sequential execution.
+const SEQUENTIAL_TOOLS = new Set([
+  'browser_navigate', 'browser_click', 'browser_fill',
+  'browser_snapshot', 'browser_list_interactables',
+  'browser_generate_locator', 'browser_eval',
+  'browser_command', 'browser_close',
+  'validate_typescript',
+  'done',
+]);
+
+// Cache tool results so duplicate calls don't re-inflate the context.
+// done() and stateful browser tools are excluded.
+const UNCACHEABLE_TOOLS = new Set([
+  'done',
+  'validate_typescript',
+  'browser_navigate',
+  'browser_snapshot',
+  'browser_click',
+  'browser_fill',
+  'browser_list_interactables',
+  'browser_close',
+]);
+
+interface FunctionToolCall {
+  id: string;
+  type: 'function';
+  function: { name: string; arguments: string };
+}
+
+async function executeToolCall(
+  toolCall: FunctionToolCall,
+  handlers: ToolHandlers,
+  toolCache: Map<string, string>,
+  toolPending: Map<string, Promise<string>>,
+): Promise<{ id: string; result: string }> {
+  const name = toolCall.function.name;
+  const args = JSON.parse(toolCall.function.arguments) as Record<string, unknown>;
+
+  const argsSummary = Object.entries(args)
+    .filter(([k]) => k !== 'code')
+    .map(([k, v]) => `${k}=${JSON.stringify(v)}`)
+    .join(', ');
+  log('INFO', `[AI] tool call: ${name}${argsSummary ? ` (${argsSummary})` : ''}`);
+  dashboardBus.emitEvent('agent', 'info', `Tool Call: ${name}`, { toolCall: name, args });
+
+  const cacheKey = `${name}:${JSON.stringify(args)}`;
+  let result: string;
+
+  if (!UNCACHEABLE_TOOLS.has(name) && toolCache.has(cacheKey)) {
+    log('INFO', `[AI] cache hit for ${name} — skipping duplicate fetch`);
+    result = `[ALREADY FETCHED — this result is already in your context from an earlier call. Do not call this tool again with the same arguments.]`;
+  } else if (!UNCACHEABLE_TOOLS.has(name) && toolPending.has(cacheKey)) {
+    log('INFO', `[AI] dedup hit for ${name} — awaiting in-flight request`);
+    result = await toolPending.get(cacheKey)!;
+  } else {
+    const handler = handlers[name];
+    if (!handler) throw new Error(`[AI] unknown tool: ${name}`);
+
+    const promise = (async () => {
+      const raw = await handler(args);
+      return typeof raw === 'string' ? raw : JSON.stringify(raw);
+    })();
+
+    if (!UNCACHEABLE_TOOLS.has(name)) toolPending.set(cacheKey, promise);
+    result = await promise;
+    if (!UNCACHEABLE_TOOLS.has(name)) toolCache.set(cacheKey, result);
+  }
+
+  const resultPreview = result.slice(0, 200).replace(/\n/g, ' ');
+  log('INFO', `[AI] tool result: ${resultPreview}${result.length > 200 ? `… (${result.length} chars total)` : ''}`);
+
+  return { id: toolCall.id, result };
 }
 
 // Provider-agnostic agent tool loop using OpenAI-compatible API (works with Minimax).
@@ -86,18 +164,6 @@ export async function runAgent(
   let promptTokens = 0;
   let completionTokens = 0;
 
-  // Cache tool results so duplicate calls don't re-inflate the context.
-  // done() and validate_typescript are excluded — they're side-effectful or need fresh data.
-  const UNCACHEABLE_TOOLS = new Set([
-    'done',
-    'validate_typescript',
-    'browser_navigate',
-    'browser_snapshot',
-    'browser_click',
-    'browser_fill',
-    'browser_list_interactables',
-    'browser_close',
-  ]);
   const toolCache = new Map<string, string>();
 
   for (let iteration = 0; iteration < maxIterations; iteration++) {
@@ -122,77 +188,69 @@ export async function runAgent(
     const choice = response.choices[0];
     const assistantMessage = choice.message;
 
-    // Log reasoning text if the model included any before tool calls
     if (assistantMessage.content) {
       const preview = assistantMessage.content.slice(0, 300).replace(/\n/g, ' ');
       log('INFO', `[AI] reasoning: ${preview}${assistantMessage.content.length > 300 ? '…' : ''}`);
       dashboardBus.emitEvent('agent', 'info', 'AI Reasoning', { reasoning: assistantMessage.content });
     }
 
-    // Append assistant turn to history
     messages.push(assistantMessage);
 
     if (choice.finish_reason === 'length') {
-      // Model hit the token limit mid-response — inject a recovery prompt and continue
       log('WARN', `[AI] response truncated (finish_reason: length) at iteration ${iteration + 1} — injecting recovery prompt`);
       messages.push({ role: 'user', content: 'Your response was cut off due to length limits. Please continue where you left off and call the appropriate tool.' });
       continue;
     }
 
     if (choice.finish_reason !== 'tool_calls' || !assistantMessage.tool_calls?.length) {
-      // Model finished without calling a tool — treat as error
       throw new Error(`[AI] model stopped without calling done() — finish_reason: ${choice.finish_reason}`);
     }
 
+    const toolCalls = assistantMessage.tool_calls.filter(tc => tc.type === 'function') as FunctionToolCall[];
+    const hasSequential = toolCalls.some(tc => SEQUENTIAL_TOOLS.has(tc.function.name));
     const toolResultMessages: OpenAI.Chat.ChatCompletionMessageParam[] = [];
 
-    for (const toolCall of assistantMessage.tool_calls) {
-      if (toolCall.type !== 'function') continue;
-      const name = toolCall.function.name;
-      const args = JSON.parse(toolCall.function.arguments) as Record<string, unknown>;
+    if (hasSequential) {
+      for (const toolCall of toolCalls) {
+        const name = toolCall.function.name;
 
-      const argsSummary = Object.entries(args)
-        .filter(([k]) => k !== 'code') // skip large code blobs in logs
-        .map(([k, v]) => `${k}=${JSON.stringify(v)}`)
-        .join(', ');
-      log('INFO', `[AI] tool call: ${name}${argsSummary ? ` (${argsSummary})` : ''}`);
-      dashboardBus.emitEvent('agent', 'info', `Tool Call: ${name}`, { toolCall: name, args });
+        if (name === 'done') {
+          const args = JSON.parse(toolCall.function.arguments) as Record<string, unknown>;
+          log('INFO', `[AI] tool call: done`);
+          dashboardBus.emitEvent('agent', 'info', `Tool Call: done`, { toolCall: 'done', args });
+          const tokenUsage: TokenUsage = {
+            promptTokens,
+            completionTokens,
+            totalTokens: promptTokens + completionTokens,
+            costUSD: computeCost(promptTokens, completionTokens),
+          };
+          log('INFO', `[AI] tokens used — prompt: ${promptTokens}, completion: ${completionTokens}, total: ${tokenUsage.totalTokens}, cost: $${tokenUsage.costUSD.toFixed(4)}`);
+          dashboardBus.emitEvent('agent', 'info', 'AI Token Usage', { tokenUsage });
+          return { args, tokenUsage };
+        }
 
-      // done() exits the loop
-      if (name === 'done') {
-        const tokenUsage: TokenUsage = {
-          promptTokens,
-          completionTokens,
-          totalTokens: promptTokens + completionTokens,
-          costUSD: computeCost(promptTokens, completionTokens),
-        };
-        log('INFO', `[AI] tokens used — prompt: ${promptTokens}, completion: ${completionTokens}, total: ${tokenUsage.totalTokens}, cost: $${tokenUsage.costUSD.toFixed(4)}`);
-        dashboardBus.emitEvent('agent', 'info', 'AI Token Usage', { tokenUsage });
-        return { args, tokenUsage };
+        const { id, result } = await executeToolCall(toolCall, toolHandlers, toolCache, new Map());
+
+        const newPrompt = options.onToolCall?.(name);
+        if (newPrompt != null) {
+          messages[0] = { role: 'system', content: newPrompt };
+        }
+
+        toolResultMessages.push({ role: 'tool', tool_call_id: id, content: result });
       }
-
-      const handler = toolHandlers[name];
-      if (!handler) {
-        throw new Error(`[AI] unknown tool: ${name}`);
+    } else {
+      // All tools are parallel-safe — fire with Promise.all
+      const toolPending = new Map<string, Promise<string>>();
+      const results = await Promise.all(
+        toolCalls.map(tc => executeToolCall(tc, toolHandlers, toolCache, toolPending))
+      );
+      // Fire onToolCall for each (parallel tools never trigger phase changes, but keep history accurate)
+      for (const tc of toolCalls) {
+        options.onToolCall?.(tc.function.name);
       }
-
-      const cacheKey = `${name}:${JSON.stringify(args)}`;
-      let result: string;
-      if (!UNCACHEABLE_TOOLS.has(name) && toolCache.has(cacheKey)) {
-        log('INFO', `[AI] cache hit for ${name} — skipping duplicate fetch`);
-        result = `[ALREADY FETCHED — this result is already in your context from an earlier call. Do not call this tool again with the same arguments.]`;
-      } else {
-        const raw = await handler(args);
-        result = typeof raw === 'string' ? raw : JSON.stringify(raw);
-        if (!UNCACHEABLE_TOOLS.has(name)) toolCache.set(cacheKey, result);
-        const resultPreview = result.slice(0, 200).replace(/\n/g, ' ');
-        log('INFO', `[AI] tool result: ${resultPreview}${result.length > 200 ? `… (${result.length} chars total)` : ''}`);
+      for (const { id, result } of results) {
+        toolResultMessages.push({ role: 'tool', tool_call_id: id, content: result });
       }
-      toolResultMessages.push({
-        role: 'tool',
-        tool_call_id: toolCall.id,
-        content: result,
-      });
     }
 
     messages.push(...toolResultMessages);

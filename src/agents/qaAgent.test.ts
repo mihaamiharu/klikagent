@@ -1,5 +1,6 @@
 import { runQaAgent } from './qaAgent';
 import { QATask } from '../types';
+import { buildSystemPrompt } from './prompts/phasePrompt';
 
 // ─── Mocks ────────────────────────────────────────────────────────────────────
 
@@ -99,5 +100,23 @@ describe('runQaAgent', () => {
     await expect(
       runQaAgent(makeTask(), 'qa/21', 'klikagent-tests'),
     ).rejects.toThrow('AI timeout');
+  });
+
+  it('passes buildSystemPrompt("context") as the initial system prompt', async () => {
+    runAgent.mockResolvedValueOnce(makeAgentResult());
+
+    await runQaAgent(makeTask(), 'qa/21', 'klikagent-tests');
+
+    const systemPrompt = runAgent.mock.calls[0][0] as string;
+    expect(systemPrompt).toBe(buildSystemPrompt('context'));
+  });
+
+  it('passes an onToolCall option to runAgent', async () => {
+    runAgent.mockResolvedValueOnce(makeAgentResult());
+
+    await runQaAgent(makeTask(), 'qa/21', 'klikagent-tests');
+
+    const options = runAgent.mock.calls[0][4] as { onToolCall?: unknown };
+    expect(typeof options?.onToolCall).toBe('function');
   });
 });

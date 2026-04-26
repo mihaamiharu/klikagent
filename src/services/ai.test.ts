@@ -238,4 +238,134 @@ describe('runAgent', () => {
     await expect(runAgent('sys', 'msg', [], {}))
       .rejects.toThrow('AI_BASE_URL');
   });
+
+  // ─── Parallel execution ──────────────────────────────────────────────────
+
+  it('runs non-sequential tools in parallel (Promise.all path)', async () => {
+    const callOrder: string[] = [];
+    // Yields once via microtask so the other parallel promise can interleave
+    const slowTool = jest.fn().mockImplementation(async () => {
+      callOrder.push('slow-start');
+      await Promise.resolve();
+      callOrder.push('slow-end');
+      return 'slow result';
+    });
+    const fastTool = jest.fn().mockImplementation(async () => {
+      callOrder.push('fast');
+      return 'fast result';
+    });
+
+    // Both tools in one batch — neither is sequential
+    mockCreate
+      .mockResolvedValueOnce({
+        choices: [{
+          finish_reason: 'tool_calls',
+          message: {
+            role: 'assistant',
+            tool_calls: [
+              { id: 'c1', type: 'function', function: { name: 'slow_tool', arguments: '{}' } },
+              { id: 'c2', type: 'function', function: { name: 'fast_tool', arguments: '{}' } },
+            ],
+          },
+        }],
+        usage: { prompt_tokens: 10, completion_tokens: 5 },
+      })
+      .mockResolvedValueOnce(makeToolCallResponse('done', { result: 'ok' }));
+
+    await runAgent('sys', 'msg', [], { slow_tool: slowTool, fast_tool: fastTool });
+
+    // Both were called
+    expect(slowTool).toHaveBeenCalledTimes(1);
+    expect(fastTool).toHaveBeenCalledTimes(1);
+    // fast started before slow finished (parallel): ['slow-start', 'fast', 'slow-end']
+    expect(callOrder.indexOf('fast')).toBeLessThan(callOrder.indexOf('slow-end'));
+  });
+
+  it('runs all tools sequentially when any sequential tool is in the batch', async () => {
+    const repoTool = jest.fn().mockResolvedValue('repo result');
+    const callOrder: string[] = [];
+
+    mockCreate
+      .mockResolvedValueOnce({
+        choices: [{
+          finish_reason: 'tool_calls',
+          message: {
+            role: 'assistant',
+            tool_calls: [
+              { id: 'c1', type: 'function', function: { name: 'repo_tool', arguments: '{}' } },
+              { id: 'c2', type: 'function', function: { name: 'browser_snapshot', arguments: '{}' } },
+            ],
+          },
+        }],
+        usage: { prompt_tokens: 10, completion_tokens: 5 },
+      })
+      .mockResolvedValueOnce(makeToolCallResponse('done', { result: 'ok' }));
+
+    repoTool.mockImplementation(async () => { callOrder.push('repo'); return 'result'; });
+    const snapshotHandler = jest.fn().mockImplementation(async () => { callOrder.push('snapshot'); return 'snap'; });
+
+    await runAgent('sys', 'msg', [], { repo_tool: repoTool, browser_snapshot: snapshotHandler });
+
+    // Sequential: repo before snapshot
+    expect(callOrder).toEqual(['repo', 'snapshot']);
+  });
+
+  it('deduplicates concurrent calls to the same cacheable tool in parallel batch', async () => {
+    const handler = jest.fn().mockResolvedValue('result');
+
+    mockCreate
+      .mockResolvedValueOnce({
+        choices: [{
+          finish_reason: 'tool_calls',
+          message: {
+            role: 'assistant',
+            tool_calls: [
+              { id: 'c1', type: 'function', function: { name: 'my_tool', arguments: '{"x":1}' } },
+              { id: 'c2', type: 'function', function: { name: 'my_tool', arguments: '{"x":1}' } },
+            ],
+          },
+        }],
+        usage: { prompt_tokens: 10, completion_tokens: 5 },
+      })
+      .mockResolvedValueOnce(makeToolCallResponse('done', { result: 'ok' }));
+
+    await runAgent('sys', 'msg', [], { my_tool: handler });
+
+    // Handler called only once despite two parallel calls with same args
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  // ─── onToolCall callback ──────────────────────────────────────────────────
+
+  it('calls onToolCall after each sequential tool and updates system prompt when non-null returned', async () => {
+    const handler = jest.fn().mockResolvedValue('result');
+    const onToolCall = jest.fn()
+      .mockReturnValueOnce('new system prompt')
+      .mockReturnValue(null);
+
+    mockCreate
+      .mockResolvedValueOnce(makeToolCallResponse('browser_navigate', {}))
+      .mockResolvedValueOnce(makeToolCallResponse('done', { result: 'ok' }));
+
+    await runAgent('sys', 'msg', [], { browser_navigate: handler }, { onToolCall });
+
+    expect(onToolCall).toHaveBeenCalledWith('browser_navigate');
+    // Second call sees the updated system prompt
+    const secondCallMessages = mockCreate.mock.calls[1][0].messages as Array<{ role: string; content: string }>;
+    expect(secondCallMessages[0]).toEqual({ role: 'system', content: 'new system prompt' });
+  });
+
+  it('does not update system prompt when onToolCall returns null', async () => {
+    const handler = jest.fn().mockResolvedValue('result');
+    const onToolCall = jest.fn().mockReturnValue(null);
+
+    mockCreate
+      .mockResolvedValueOnce(makeToolCallResponse('browser_navigate', {}))
+      .mockResolvedValueOnce(makeToolCallResponse('done', { result: 'ok' }));
+
+    await runAgent('sys', 'msg', [], { browser_navigate: handler }, { onToolCall });
+
+    const secondCallMessages = mockCreate.mock.calls[1][0].messages as Array<{ role: string; content: string }>;
+    expect(secondCallMessages[0]).toEqual({ role: 'system', content: 'sys' });
+  });
 });
