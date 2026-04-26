@@ -172,8 +172,23 @@ async function handleListInteractables(_args: Record<string, unknown>): Promise<
 async function handleGenerateLocator(args: Record<string, unknown>): Promise<string> {
   const ref = String(args['ref'] ?? '');
   if (!ref) throw new Error('browser_generate_locator: ref is required');
+  if (!sessionActive) {
+    return JSON.stringify({ error: 'BROWSER_ERROR', message: 'No active browser session — call browser_navigate first' });
+  }
   log('INFO', `[BrowserTools] Generating locator for ref: ${ref}`);
-  return cli('--raw', 'generate-locator', ref);
+  try {
+    const result = await cli('--raw', 'generate-locator', ref);
+    // Sanity-check: a valid locator starts with getBy*, locator(), nth(), etc.
+    // If the output looks like an error or help text, surface it clearly so the agent can fall back.
+    const looksLikeLocator = /^(getBy|page\.|locator|nth\(|\.filter)/.test(result.trim());
+    if (!looksLikeLocator) {
+      log('WARN', `[BrowserTools] generate-locator returned unexpected output: ${result.slice(0, 100)}`);
+      return JSON.stringify({ error: 'GENERATE_LOCATOR_FAILED', ref, message: result.trim() });
+    }
+    return result.trim();
+  } catch (err) {
+    return JSON.stringify({ error: 'BROWSER_ERROR', message: String(err) });
+  }
 }
 
 async function handleEval(args: Record<string, unknown>): Promise<string> {
