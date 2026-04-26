@@ -81,18 +81,26 @@ export async function generateQaSpecFlow(task: QATask): Promise<void> {
 }
 
 async function postCallback(url: string, result: TaskResult): Promise<void> {
-  try {
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(result),
-    });
-    if (!res.ok) {
-      log('WARN', `[generateQaSpecFlow] Callback to ${url} returned ${res.status}`);
-    } else {
-      log('INFO', `[generateQaSpecFlow] Callback posted to ${url}`);
+  const maxAttempts = 3;
+  const delayMs = 2000;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(result),
+      });
+      if (!res.ok) {
+        log('WARN', `[generateQaSpecFlow] Callback to ${url} returned ${res.status} (attempt ${attempt}/${maxAttempts})`);
+      } else {
+        log('INFO', `[generateQaSpecFlow] Callback posted to ${url}`);
+        return;
+      }
+    } catch (err) {
+      log('WARN', `[generateQaSpecFlow] Callback to ${url} failed: ${(err as Error).message} (attempt ${attempt}/${maxAttempts})`);
     }
-  } catch (err) {
-    log('WARN', `[generateQaSpecFlow] Callback to ${url} failed: ${(err as Error).message}`);
+    if (attempt < maxAttempts) await new Promise((r) => setTimeout(r, delayMs));
   }
+  log('WARN', `[generateQaSpecFlow] Callback to ${url} gave up after ${maxAttempts} attempts`);
 }
