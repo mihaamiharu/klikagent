@@ -71,7 +71,7 @@ describe('provisionRepo', () => {
     const committedPaths = mockCommitFile.mock.calls.map((call) => call[2]);
     expect(committedPaths).toContain('config/routes.ts');
     expect(committedPaths).toContain('config/keywords.json');
-    expect(committedPaths).toContain('config/personas.json');
+    expect(committedPaths).toContain('config/personas.ts');
     expect(committedPaths).toContain('context/domain.md');
     expect(committedPaths).toContain('context/personas.md');
     expect(committedPaths).toContain('context/test-patterns.md');
