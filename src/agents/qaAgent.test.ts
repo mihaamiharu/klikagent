@@ -1,16 +1,18 @@
 import { runQaAgent } from './qaAgent';
-import { QATask } from '../types';
-import { buildSystemPrompt } from './prompts/phasePrompt';
+import { QATask, ExplorationReport, WriterContext } from '../types';
 
 // ─── Mocks ────────────────────────────────────────────────────────────────────
 
-jest.mock('../services/ai', () => ({
-  runAgent: jest.fn(),
-}));
-jest.mock('../utils/logger', () => ({ log: jest.fn() }));
+jest.mock('./explorerAgent');
+jest.mock('./writerAgent');
+jest.mock('../services/writerContext');
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-const { runAgent } = require('../services/ai') as { runAgent: jest.Mock };
+const { runExplorerAgent } = require('./explorerAgent') as { runExplorerAgent: jest.Mock };
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { runWriterAgent } = require('./writerAgent') as { runWriterAgent: jest.Mock };
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { prefetchWriterContext } = require('../services/writerContext') as { prefetchWriterContext: jest.Mock };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -25,98 +27,112 @@ function makeTask(overrides: Partial<QATask> = {}): QATask {
   };
 }
 
-function makeAgentResult(overrides: object = {}) {
-  return {
-    args: {
-      enrichedSpec: 'test("reviews", async () => {});',
-      poms: [{ pomContent: 'export class ReviewsPage {}', pomPath: 'pages/general/ReviewsPage.ts' }],
-      affectedPaths: 'tests/web/general/',
-      ...overrides,
-    },
-    tokenUsage: { promptTokens: 100, completionTokens: 50, totalTokens: 150, costUSD: 0.001 },
-  };
-}
+const baseTokenUsage = { promptTokens: 100, completionTokens: 50, totalTokens: 150, costUSD: 0.001 };
+
+const mockReport: ExplorationReport = {
+  feature: 'doctors',
+  visitedRoutes: ['/doctor', '/doctor/reviews'],
+  authPersona: 'patient',
+  locators: { '/doctor': { reviewsTab: "page.getByRole('tab', { name: 'Reviews' })" } },
+  flows: [{ name: 'view reviews', steps: 'navigate /doctor → click Reviews tab', observed: 'review list visible' }],
+  missingLocators: [],
+  notes: [],
+};
+
+const mockCtx: WriterContext = {
+  fixtures: 'export const test = base.extend({});',
+  personas: 'export const personas = {};',
+  contextDocs: '',
+  availablePoms: [],
+  existingTests: {},
+  existingPom: null,
+};
+
+const mockWriterResult = {
+  feature: 'doctors',
+  enrichedSpec: 'test("reviews", async () => {});',
+  poms: [{ pomContent: 'export class DoctorPage {}', pomPath: 'pages/doctors/DoctorPage.ts' }],
+  affectedPaths: 'tests/web/doctors/',
+  fixtureUpdate: undefined,
+  tokenUsage: baseTokenUsage,
+};
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 describe('runQaAgent', () => {
   beforeEach(() => {
     jest.resetAllMocks();
+    runExplorerAgent.mockResolvedValue({ report: mockReport, tokenUsage: baseTokenUsage });
+    prefetchWriterContext.mockResolvedValue(mockCtx);
+    runWriterAgent.mockResolvedValue(mockWriterResult);
   });
 
-  it('returns enrichedSpec, poms, affectedPaths, tokenUsage from agent', async () => {
-    runAgent.mockResolvedValueOnce(makeAgentResult());
+  it('calls explorerAgent, prefetchWriterContext, then writerAgent in order', async () => {
+    const order: string[] = [];
+    runExplorerAgent.mockImplementation(async () => { order.push('explorer'); return { report: mockReport, tokenUsage: baseTokenUsage }; });
+    prefetchWriterContext.mockImplementation(async () => { order.push('prefetch'); return mockCtx; });
+    runWriterAgent.mockImplementation(async () => { order.push('writer'); return mockWriterResult; });
 
-    const result = await runQaAgent(makeTask(), 'qa/21-doctor-reviews', 'klikagent-tests');
+    await runQaAgent(makeTask(), 'qa/21', 'klikagent-tests');
 
+    expect(order).toEqual(['explorer', 'prefetch', 'writer']);
+  });
+
+  it('passes the exploration report to writerAgent', async () => {
+    await runQaAgent(makeTask(), 'qa/21', 'klikagent-tests');
+
+    const [, , passedReport] = runWriterAgent.mock.calls[0];
+    expect(passedReport).toEqual(mockReport);
+  });
+
+  it('passes the prefetched context to writerAgent', async () => {
+    await runQaAgent(makeTask(), 'qa/21', 'klikagent-tests');
+
+    const [, , , passedCtx] = runWriterAgent.mock.calls[0];
+    expect(passedCtx).toEqual(mockCtx);
+  });
+
+  it('uses the feature from the report for prefetchWriterContext', async () => {
+    await runQaAgent(makeTask(), 'qa/21', 'klikagent-tests');
+
+    expect(prefetchWriterContext).toHaveBeenCalledWith('klikagent-tests', 'doctors');
+  });
+
+  it('returns enrichedSpec, poms, affectedPaths, and feature from writerAgent', async () => {
+    const result = await runQaAgent(makeTask(), 'qa/21', 'klikagent-tests');
+
+    expect(result.feature).toBe('doctors');
     expect(result.enrichedSpec).toBe('test("reviews", async () => {});');
-    expect(result.poms[0].pomContent).toBe('export class ReviewsPage {}');
-    expect(result.poms[0].pomPath).toBe('pages/general/ReviewsPage.ts');
-    expect(result.affectedPaths).toBe('tests/web/general/');
-    expect(result.tokenUsage).toEqual({ promptTokens: 100, completionTokens: 50, totalTokens: 150, costUSD: 0.001 });
+    expect(result.poms[0].pomPath).toBe('pages/doctors/DoctorPage.ts');
+    expect(result.affectedPaths).toBe('tests/web/doctors/');
   });
 
-  it('calls runAgent with qaTools and qaHandlers', async () => {
-    runAgent.mockResolvedValueOnce(makeAgentResult());
+  it('sums token usage from both agents', async () => {
+    const explorerUsage = { promptTokens: 300, completionTokens: 100, totalTokens: 400, costUSD: 0.005 };
+    const writerUsage   = { promptTokens: 100, completionTokens:  50, totalTokens: 150, costUSD: 0.001 };
+    runExplorerAgent.mockResolvedValue({ report: mockReport, tokenUsage: explorerUsage });
+    runWriterAgent.mockResolvedValue({ ...mockWriterResult, tokenUsage: writerUsage });
 
-    await runQaAgent(makeTask(), 'qa/21', 'klikagent-tests');
+    const result = await runQaAgent(makeTask(), 'qa/21', 'klikagent-tests');
 
-    expect(runAgent).toHaveBeenCalledTimes(1);
-    const [, , tools, handlers] = runAgent.mock.calls[0];
-    const toolNames = tools.map((t: { function: { name: string } }) => t.function.name);
-    expect(toolNames).toContain('browser_navigate');
-    expect(toolNames).toContain('browser_snapshot');
-    expect(toolNames).toContain('validate_typescript');
-    expect(toolNames).toContain('done');
-    expect(handlers).toHaveProperty('browser_navigate');
-    expect(handlers).toHaveProperty('browser_snapshot');
-    expect(handlers).toHaveProperty('validate_typescript');
+    expect(result.tokenUsage).toEqual({
+      promptTokens:     400,
+      completionTokens: 150,
+      totalTokens:      550,
+      costUSD:          0.006,
+    });
   });
 
-  it('includes taskId, title, description, and qaEnvUrl in the user message', async () => {
-    runAgent.mockResolvedValueOnce(makeAgentResult());
+  it('propagates explorer errors without calling writerAgent', async () => {
+    runExplorerAgent.mockRejectedValue(new Error('QA environment unreachable'));
 
-    await runQaAgent(makeTask(), 'qa/21', 'klikagent-tests');
-
-    const userMessage = runAgent.mock.calls[0][1] as string;
-    expect(userMessage).toContain('21');
-    expect(userMessage).toContain('Doctor reviews');
-    expect(userMessage).toContain('Given a patient views a completed appointment');
-    expect(userMessage).toContain('https://qa.example.com');
+    await expect(runQaAgent(makeTask(), 'qa/21', 'klikagent-tests')).rejects.toThrow('QA environment unreachable');
+    expect(runWriterAgent).not.toHaveBeenCalled();
   });
 
-  it('includes the branch in the user message', async () => {
-    runAgent.mockResolvedValueOnce(makeAgentResult());
+  it('propagates writer errors', async () => {
+    runWriterAgent.mockRejectedValue(new Error('TypeScript validation loop'));
 
-    await runQaAgent(makeTask(), 'qa/21-doctor-reviews', 'klikagent-tests');
-
-    const userMessage = runAgent.mock.calls[0][1] as string;
-    expect(userMessage).toContain('qa/21-doctor-reviews');
-  });
-
-  it('propagates agent errors', async () => {
-    runAgent.mockRejectedValueOnce(new Error('AI timeout'));
-
-    await expect(
-      runQaAgent(makeTask(), 'qa/21', 'klikagent-tests'),
-    ).rejects.toThrow('AI timeout');
-  });
-
-  it('passes buildSystemPrompt("context") as the initial system prompt', async () => {
-    runAgent.mockResolvedValueOnce(makeAgentResult());
-
-    await runQaAgent(makeTask(), 'qa/21', 'klikagent-tests');
-
-    const systemPrompt = runAgent.mock.calls[0][0] as string;
-    expect(systemPrompt).toBe(buildSystemPrompt('context'));
-  });
-
-  it('passes an onToolCall option to runAgent', async () => {
-    runAgent.mockResolvedValueOnce(makeAgentResult());
-
-    await runQaAgent(makeTask(), 'qa/21', 'klikagent-tests');
-
-    const options = runAgent.mock.calls[0][4] as { onToolCall?: unknown };
-    expect(typeof options?.onToolCall).toBe('function');
+    await expect(runQaAgent(makeTask(), 'qa/21', 'klikagent-tests')).rejects.toThrow('TypeScript validation loop');
   });
 });
