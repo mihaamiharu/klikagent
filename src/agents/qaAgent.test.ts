@@ -12,7 +12,10 @@ const { runExplorerAgent } = require('./explorerAgent') as { runExplorerAgent: j
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const { runWriterAgent } = require('./writerAgent') as { runWriterAgent: jest.Mock };
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-const { prefetchWriterContext } = require('../services/writerContext') as { prefetchWriterContext: jest.Mock };
+const { prefetchBaseContext, resolveWriterContext } = require('../services/writerContext') as {
+  prefetchBaseContext: jest.Mock;
+  resolveWriterContext: jest.Mock;
+};
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -39,11 +42,15 @@ const mockReport: ExplorationReport = {
   notes: [],
 };
 
-const mockCtx: WriterContext = {
+const mockBaseCtx = {
   fixtures: 'export const test = base.extend({});',
   personas: 'export const personas = {};',
   contextDocs: '',
   availablePoms: [],
+};
+
+const mockCtx: WriterContext = {
+  ...mockBaseCtx,
   existingTests: {},
   existingPom: null,
 };
@@ -63,19 +70,39 @@ describe('runQaAgent', () => {
   beforeEach(() => {
     jest.resetAllMocks();
     runExplorerAgent.mockResolvedValue({ report: mockReport, tokenUsage: baseTokenUsage });
-    prefetchWriterContext.mockResolvedValue(mockCtx);
+    prefetchBaseContext.mockResolvedValue(mockBaseCtx);
+    resolveWriterContext.mockResolvedValue(mockCtx);
     runWriterAgent.mockResolvedValue(mockWriterResult);
   });
 
-  it('calls explorerAgent, prefetchWriterContext, then writerAgent in order', async () => {
-    const order: string[] = [];
-    runExplorerAgent.mockImplementation(async () => { order.push('explorer'); return { report: mockReport, tokenUsage: baseTokenUsage }; });
-    prefetchWriterContext.mockImplementation(async () => { order.push('prefetch'); return mockCtx; });
-    runWriterAgent.mockImplementation(async () => { order.push('writer'); return mockWriterResult; });
+  it('runs explorerAgent and prefetchBaseContext in parallel, then writer', async () => {
+    const started: string[] = [];
+    const finished: string[] = [];
+
+    runExplorerAgent.mockImplementation(async () => {
+      started.push('explorer');
+      await new Promise(r => setTimeout(r, 10));
+      finished.push('explorer');
+      return { report: mockReport, tokenUsage: baseTokenUsage };
+    });
+    prefetchBaseContext.mockImplementation(async () => {
+      started.push('base');
+      finished.push('base');
+      return mockBaseCtx;
+    });
+    resolveWriterContext.mockResolvedValue(mockCtx);
+    runWriterAgent.mockImplementation(async () => {
+      started.push('writer');
+      finished.push('writer');
+      return mockWriterResult;
+    });
 
     await runQaAgent(makeTask(), 'qa/21', 'klikagent-tests');
 
-    expect(order).toEqual(['explorer', 'prefetch', 'writer']);
+    // Both explorer and base start before either finishes (parallel)
+    expect(started.slice(0, 2).sort()).toEqual(['base', 'explorer']);
+    // Writer always starts after explorer and base finish
+    expect(finished.indexOf('writer')).toBeGreaterThan(finished.indexOf('explorer'));
   });
 
   it('passes the exploration report to writerAgent', async () => {
@@ -85,17 +112,17 @@ describe('runQaAgent', () => {
     expect(passedReport).toEqual(mockReport);
   });
 
-  it('passes the prefetched context to writerAgent', async () => {
+  it('passes the resolved context to writerAgent', async () => {
     await runQaAgent(makeTask(), 'qa/21', 'klikagent-tests');
 
     const [, , , passedCtx] = runWriterAgent.mock.calls[0];
     expect(passedCtx).toEqual(mockCtx);
   });
 
-  it('uses the feature from the report for prefetchWriterContext', async () => {
+  it('resolves feature-specific context using the feature from the report', async () => {
     await runQaAgent(makeTask(), 'qa/21', 'klikagent-tests');
 
-    expect(prefetchWriterContext).toHaveBeenCalledWith('klikagent-tests', 'doctors');
+    expect(resolveWriterContext).toHaveBeenCalledWith('klikagent-tests', 'doctors', mockBaseCtx);
   });
 
   it('returns enrichedSpec, poms, affectedPaths, and feature from writerAgent', async () => {

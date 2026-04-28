@@ -1,34 +1,60 @@
 import * as testRepo from './testRepo';
 import { WriterContext } from '../types';
 
+// Feature-independent context — safe to prefetch while the explorer is still running.
+interface BaseContext {
+  fixtures: string;
+  personas: string;
+  contextDocs: string;
+  availablePoms: string[];
+}
+
 /**
- * Pre-fetches all repo context the writer agent needs.
- * Called by the orchestrator (qaAgent) between explorerAgent and writerAgent,
- * so the writer receives a fully self-contained context and needs zero repo tool calls.
+ * Fetches the parts of WriterContext that don't need the feature name.
+ * Called by the orchestrator in parallel with runExplorerAgent so the
+ * fetch overlaps with the (long) browser exploration phase.
  */
-export async function prefetchWriterContext(repoName: string, feature: string): Promise<WriterContext> {
-  const [fixtures, personas, contextDocsMap, availablePoms, existingTestsMap, existingPom] =
-    await Promise.all([
-      testRepo.getFixtures(repoName),
-      testRepo.getPersonas(repoName),
-      testRepo.getContextDocs(repoName),
-      testRepo.listAllPOMs(repoName),
-      testRepo.getExistingTests(repoName, feature),
-      testRepo.getExistingPOM(repoName, feature),
-    ]);
+export async function prefetchBaseContext(repoName: string): Promise<BaseContext> {
+  const [fixtures, personas, contextDocsMap, availablePoms] = await Promise.all([
+    testRepo.getFixtures(repoName),
+    testRepo.getPersonas(repoName),
+    testRepo.getContextDocs(repoName),
+    testRepo.listAllPOMs(repoName),
+  ]);
 
   const contextDocs = Object.entries(contextDocsMap)
     .map(([file, content]) => `## ${file}\n${content}`)
     .join('\n\n');
 
-  return {
-    fixtures,
-    personas,
-    contextDocs,
-    availablePoms,
-    existingTests: existingTestsMap,
-    existingPom,
-  };
+  return { fixtures, personas, contextDocs, availablePoms };
+}
+
+/**
+ * Fetches the feature-specific parts of WriterContext.
+ * Called after the explorer returns (feature name is now known).
+ */
+async function prefetchFeatureContext(
+  repoName: string,
+  feature: string,
+): Promise<Pick<WriterContext, 'existingTests' | 'existingPom'>> {
+  const [existingTestsMap, existingPom] = await Promise.all([
+    testRepo.getExistingTests(repoName, feature),
+    testRepo.getExistingPOM(repoName, feature),
+  ]);
+  return { existingTests: existingTestsMap, existingPom };
+}
+
+/**
+ * Merges base + feature context into a complete WriterContext.
+ * Call this after the explorer finishes and the feature name is known.
+ */
+export async function resolveWriterContext(
+  repoName: string,
+  feature: string,
+  base: BaseContext,
+): Promise<WriterContext> {
+  const featureCtx = await prefetchFeatureContext(repoName, feature);
+  return { ...base, ...featureCtx };
 }
 
 /** Formats a WriterContext into the user message section injected into the writer. */

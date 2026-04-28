@@ -2,7 +2,7 @@ import { QATask } from '../types';
 import { TokenUsage } from '../services/ai';
 import { runExplorerAgent } from './explorerAgent';
 import { runWriterAgent } from './writerAgent';
-import { prefetchWriterContext } from '../services/writerContext';
+import { prefetchBaseContext, resolveWriterContext } from '../services/writerContext';
 
 export async function runQaAgent(
   task: QATask,
@@ -16,13 +16,18 @@ export async function runQaAgent(
   fixtureUpdate?: string;
   tokenUsage: TokenUsage;
 }> {
-  // Step 1: Explore — browser agent navigates the live app and produces a structured report
-  const { report, tokenUsage: explorerUsage } = await runExplorerAgent(task, branch, repoName);
+  // Step 1: Explore + base context fetch run in parallel.
+  // Base context (fixtures, personas, contextDocs, POMs list) is feature-independent
+  // so we overlap it with the long browser exploration phase.
+  const [{ report, tokenUsage: explorerUsage }, baseCtx] = await Promise.all([
+    runExplorerAgent(task, branch, repoName),
+    prefetchBaseContext(repoName),
+  ]);
 
-  // Step 2: Pre-fetch repo context so the writer starts with a fully self-contained message
-  const ctx = await prefetchWriterContext(repoName, report.feature);
+  // Step 2: Fetch the feature-specific context now that we know the feature name.
+  const ctx = await resolveWriterContext(repoName, report.feature, baseCtx);
 
-  // Step 3: Write — fresh-context agent generates spec + POM from the report, no browser access
+  // Step 3: Write — fresh-context agent generates spec + POM from the report, no browser access.
   const { feature, enrichedSpec, poms, affectedPaths, fixtureUpdate, tokenUsage: writerUsage } =
     await runWriterAgent(task, branch, report, ctx);
 
