@@ -171,6 +171,7 @@ describe('runWithSelfCorrection', () => {
       expect.stringContaining('Cannot find module'),
       expect.any(Array),
       expect.any(Object),
+      expect.objectContaining({ maxIterations: 10 }),
     );
   });
 });
