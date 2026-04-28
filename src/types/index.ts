@@ -1,3 +1,39 @@
+// ─── Explorer → Writer handoff ───────────────────────────────────────────────
+
+export interface ObservedFlow {
+  name: string;     // e.g. "patient login success"
+  steps: string;    // e.g. "navigate /login → fill email → click submit → redirect /dashboard"
+  observed: string; // e.g. "welcome heading visible, user name and role shown in nav"
+}
+
+export interface MissingLocator {
+  route: string;  // e.g. "/dashboard"
+  name: string;   // e.g. "logoutButton"
+  reason: string; // e.g. "button not present in snapshot after login"
+}
+
+// Structured handoff from explorerAgent to writerAgent.
+// locators are grouped by route so the writer knows exactly which page each element lives on.
+export interface ExplorationReport {
+  feature: string;
+  visitedRoutes: string[];                              // e.g. ["/login", "/dashboard"]
+  authPersona: string;
+  locators: Record<string, Record<string, string>>;     // route → name → generatedCode
+  flows: ObservedFlow[];
+  missingLocators: MissingLocator[];
+  notes: string[];                                      // behavioral observations
+}
+
+// Pre-fetched repo context injected into writerAgent — no tool calls needed from the writer.
+export interface WriterContext {
+  fixtures: string;
+  personas: string;
+  contextDocs: string;
+  availablePoms: string[];
+  existingTests: Record<string, string>;
+  existingPom: string | null;
+}
+
 // ─── QA Task (normalized payload from trigger services) ───────────────────────
 
 // Trigger services (klikagent-github-trigger, jira-trigger, etc.) translate

@@ -257,6 +257,7 @@ export async function runWithSelfCorrection(
       `VIOLATIONS:\n${violationList}\n\n### Spec\n${specContent}\n\n${pomSummary}`,
       conventionOnlyTools,
       validateTypescriptHandler,
+      { maxIterations: 10 },
     );
 
     tokenUsage = addTokenUsage(tokenUsage, fixUsage);
@@ -299,6 +300,7 @@ export async function runWithSelfCorrection(
       `TypeScript errors:\n${tsErrors}\n\nSpec:\n${specContent}`,
       fixTools,
       validateTypescriptHandler,
+      { maxIterations: 10 },
     );
     tokenUsage = addTokenUsage(tokenUsage, fixUsage);
     specContent = args.fixedSpec as string;

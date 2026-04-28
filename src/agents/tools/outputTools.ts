@@ -117,17 +117,78 @@ export function pomPathFromContent(pomContent: string, feature: string): string 
   return `pages/${feature}/${className}.ts`;
 }
 
+export const explorationDoneTool: AgentTool = {
+  type: 'function',
+  function: {
+    name: 'done',
+    description: 'Submit the ExplorationReport after calling browser_close(). Call this only when all browser interactions are complete.',
+    parameters: {
+      type: 'object',
+      properties: {
+        feature: { type: 'string', description: 'Feature folder name e.g. "auth", "doctors"' },
+        visitedRoutes: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'All app routes visited e.g. ["/login", "/dashboard", "/doctor"]',
+        },
+        authPersona: { type: 'string', description: 'Persona name used for authentication e.g. "patient"' },
+        locators: {
+          type: 'object',
+          description: 'Locators grouped by route. e.g. { "/login": { "emailInput": "page.getByTestId(\'email-input\')" }, "/dashboard": { "logoutButton": "page.getByRole(\'button\', { name: \'Log out\' })" } }',
+          additionalProperties: {
+            type: 'object',
+            additionalProperties: { type: 'string' },
+          },
+        },
+        flows: {
+          type: 'array',
+          description: 'One entry per acceptance criterion scenario',
+          items: {
+            type: 'object',
+            properties: {
+              name:     { type: 'string', description: 'Scenario name e.g. "patient login success"' },
+              steps:    { type: 'string', description: 'Step-by-step e.g. "navigate /login → fill email → click submit → redirect /dashboard"' },
+              observed: { type: 'string', description: 'What you observed after the flow completed' },
+            },
+            required: ['name', 'steps', 'observed'],
+          },
+        },
+        missingLocators: {
+          type: 'array',
+          description: 'Elements expected but not observed in any snapshot',
+          items: {
+            type: 'object',
+            properties: {
+              route:  { type: 'string', description: 'Route where the element was expected' },
+              name:   { type: 'string', description: 'Descriptive element name e.g. "logoutButton"' },
+              reason: { type: 'string', description: 'Why it was not found e.g. "button not present in snapshot"' },
+            },
+            required: ['route', 'name', 'reason'],
+          },
+        },
+        notes: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Critical behavioral observations: where buttons live, redirects, conditional visibility, dynamic content',
+        },
+      },
+      required: ['feature', 'visitedRoutes', 'authPersona', 'locators', 'flows'],
+    },
+  },
+};
+
 export const validateTypescriptTool: AgentTool = {
   type: 'function',
   function: {
     name: 'validate_typescript',
-    description: 'Validate that the generated TypeScript code compiles without errors.',
+    description: 'Validate that generated TypeScript code compiles without errors. Pass fileType so spec-only checks apply correctly.',
     parameters: {
       type: 'object',
       properties: {
-        code: { type: 'string', description: 'TypeScript code to validate' },
+        code:     { type: 'string', description: 'TypeScript code to validate' },
+        fileType: { type: 'string', enum: ['spec', 'pom'], description: '"spec" for test files, "pom" for Page Object Models. Spec-only checks (no page.getBy* in spec, no hardcoded persona names) only run for specs.' },
       },
-      required: ['code'],
+      required: ['code', 'fileType'],
     },
   },
 };
@@ -135,24 +196,49 @@ export const validateTypescriptTool: AgentTool = {
 export const validateTypescriptHandler: ToolHandlers = {
   validate_typescript: async (args) => {
     const code = args.code as string;
+    const fileType = (args.fileType as string | undefined) ?? 'spec';
+
     const sourceFile = ts.createSourceFile('check.ts', code, ts.ScriptTarget.Latest, true);
     const diagnostics = (sourceFile as unknown as { parseDiagnostics?: ts.Diagnostic[] }).parseDiagnostics ?? [];
     const errors = diagnostics.map((d) => ({
       line: d.file ? d.file.getLineAndCharacterOfPosition(d.start ?? 0).line + 1 : 0,
       message: ts.flattenDiagnosticMessageText(d.messageText, '\n'),
     }));
-    // Also check for known invalid Playwright patterns that tsc won't catch
-    const invalidPatterns: Array<{ pattern: RegExp; hint: string }> = [
+
+    // Checks that apply to all files
+    const allFilePatterns: Array<{ pattern: RegExp; hint: string }> = [
       {
         pattern: /expect\([^)]+\)\.(toContainText|toHaveText|toBeVisible|toBeDisabled|toBeEnabled|toHaveValue)\([^)]*\)\.or\(/,
         hint: 'expect(...).or() is not valid Playwright — use locator.or(otherLocator) on the locator itself, or use a regex in toContainText(/a|b/)',
       },
     ];
-    for (const { pattern, hint } of invalidPatterns) {
-      if (pattern.test(code)) {
-        errors.push({ line: 0, message: hint });
+
+    // Checks that apply to spec files only
+    const specOnlyPatterns: Array<{ pattern: RegExp; hint: string }> = [
+      {
+        pattern: /\bpage\.(getByRole|getByTestId|getByLabel|getByText|getByPlaceholder|locator)\s*\(/,
+        hint: 'Direct page.getBy* or page.locator() found in spec file. All element interactions and locators must go through POM methods/properties — never access the page directly from a spec.',
+      },
+      {
+        pattern: /getBy(?:Text|Role)\s*\(\s*['"`][^'"`]*(?:Jane Doe|Jane|Dr\.|Admin)[^'"`]*['"`]/,
+        hint: 'Hardcoded persona display name detected. Use personas.patient.displayName (or equivalent) instead of a literal string.',
+      },
+      {
+        pattern: /import\s*{[^}]*}\s*from\s*['"]@playwright\/test['"]/,
+        hint: 'Do not import from @playwright/test directly in spec files. Use the fixture layer: import { test, expect } from \'../../../fixtures\'',
+      },
+    ];
+
+    for (const { pattern, hint } of allFilePatterns) {
+      if (pattern.test(code)) errors.push({ line: 0, message: hint });
+    }
+
+    if (fileType === 'spec') {
+      for (const { pattern, hint } of specOnlyPatterns) {
+        if (pattern.test(code)) errors.push({ line: 0, message: hint });
       }
     }
+
     // Conditional checks: flag patterns that require something else to also be present
     const usesExpect = /\bawait\s+expect\s*\(/.test(code);
     const importsExpect = /import\s*{[^}]*\bexpect\b[^}]*}/.test(code);
@@ -162,6 +248,7 @@ export const validateTypescriptHandler: ToolHandlers = {
         message: 'Code uses expect() but does not import it. Add expect to your import: import { Page, Locator, expect } from \'@playwright/test\' (for POMs) or import { test, expect } from \'../fixtures\' (for specs)',
       });
     }
+
     return JSON.stringify({ valid: errors.length === 0, errors });
   },
 };
