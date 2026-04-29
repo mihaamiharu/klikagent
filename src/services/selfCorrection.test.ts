@@ -32,6 +32,7 @@ jest.mock('../agents/tools/outputTools', () => ({
     function: { name: 'done', description: 'Done', parameters: { type: 'object', properties: {}, required: [] } },
   },
   pomPathFromContent: jest.fn().mockReturnValue('pages/test/TestPage.ts'),
+  PAGE_GETBY_IN_SPEC_PATTERN: /\bpage\.(getByRole|getByTestId|getByLabel|getByText|getByPlaceholder|getByAltText|getByTitle|locator)\s*\(/,
 }));
 
 jest.mock('../agents/tools', () => ({
