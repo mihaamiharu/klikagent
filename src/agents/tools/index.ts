@@ -1,7 +1,7 @@
 export { browserTools, browserHandlers } from '../../services/browserTools';
 import { browserTools, browserHandlers } from '../../services/browserTools';
 import { AgentTool, ToolHandlers } from '../../types';
-import { repoToolDefs, createRepoToolHandlers } from './repoTools';
+import { repoToolDefs, repoReadToolDefs, createRepoToolHandlers } from './repoTools';
 import {
   reviewDoneTool, qaDoneTool, explorationDoneTool,
   validateTypescriptTool, validateTypescriptHandler,
@@ -13,14 +13,16 @@ function merge(...handlers: ToolHandlers[]): ToolHandlers {
 
 // Explorer: browser tools + repo read tools + exploration done
 // No validate_typescript — explorer does not write code
-export const explorerTools: AgentTool[] = [...browserTools, ...repoToolDefs, explorationDoneTool];
+// No spec read tools — explorer only needs fixtures, personas, context docs during browsing
+export const explorerTools: AgentTool[] = [...browserTools, ...repoReadToolDefs, explorationDoneTool];
 
 // Writer: only validate + done — all context is pre-fetched and injected into the user message
 export const writerTools: AgentTool[] = [validateTypescriptTool, qaDoneTool];
 
 // Review agent: repo read tools + validate + done
-// Comments are already injected into the user message — no GitHub fetch tool needed
-export const reviewTools: AgentTool[] = [...repoToolDefs, validateTypescriptTool, reviewDoneTool];
+// Comments and spec content are pre-fetched and injected into the user message
+// No spec read tools needed — spec is provided directly
+export const reviewTools: AgentTool[] = [...repoReadToolDefs, validateTypescriptTool, reviewDoneTool];
 
 // Legacy combined tool set — kept for backwards compatibility with any tests that reference it
 export const qaTools: AgentTool[] = [...browserTools, ...repoToolDefs, validateTypescriptTool, qaDoneTool];

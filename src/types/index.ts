@@ -86,6 +86,7 @@ export interface ReviewContext {
   reviewId: number;
   reviewerLogin: string;
   comments: ReviewComment[];      // inline review comments (fetched at parse time)
+  specPath: string;               // repo-relative path to the spec file e.g. "tests/web/auth/qa-auth-flow.spec.ts"
 }
 
 // A GitHub pull request (used by CI gate and test repo service)

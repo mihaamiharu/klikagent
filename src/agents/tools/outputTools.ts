@@ -177,6 +177,14 @@ export const explorationDoneTool: AgentTool = {
   },
 };
 
+/**
+ * Canonical regex for detecting direct page.getBy* / page.locator() calls in spec files.
+ * Shared by validate_typescript (outputTools) and checkSpecConventions (selfCorrection)
+ * so both layers apply exactly the same rule.
+ */
+export const PAGE_GETBY_IN_SPEC_PATTERN =
+  /\bpage\.(getByRole|getByTestId|getByLabel|getByText|getByPlaceholder|getByAltText|getByTitle|locator)\s*\(/;
+
 export const validateTypescriptTool: AgentTool = {
   type: 'function',
   function: {
@@ -216,7 +224,7 @@ export const validateTypescriptHandler: ToolHandlers = {
     // Checks that apply to spec files only
     const specOnlyPatterns: Array<{ pattern: RegExp; hint: string }> = [
       {
-        pattern: /\bpage\.(getByRole|getByTestId|getByLabel|getByText|getByPlaceholder|locator)\s*\(/,
+        pattern: PAGE_GETBY_IN_SPEC_PATTERN,
         hint: 'Direct page.getBy* or page.locator() found in spec file. All element interactions and locators must go through POM methods/properties — never access the page directly from a spec.',
       },
       {

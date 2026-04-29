@@ -1,7 +1,10 @@
 import { AgentTool, ToolHandlers } from '../../types';
 import * as testRepo from '../../services/testRepo';
 
-export const repoToolDefs: AgentTool[] = [
+// ─── Repo read tools (feature-independent, safe for all agents) ───────────────
+// Fixtures, personas, context docs, POMs list, config files.
+
+export const repoReadToolDefs: AgentTool[] = [
   {
     type: 'function',
     function: {
@@ -59,6 +62,52 @@ export const repoToolDefs: AgentTool[] = [
   {
     type: 'function',
     function: {
+      name: 'get_current_pom',
+      description: 'Get the current POM file from the QA branch (may have been updated in a previous step).',
+      parameters: {
+        type: 'object',
+        properties: {
+          branch: { type: 'string' },
+          feature: { type: 'string' },
+        },
+        required: ['branch', 'feature'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'list_available_poms',
+      description: 'List all existing Page Object Model files in the test repo pages/ directory. Use this before writing imports to ensure you only import POMs that actually exist.',
+      parameters: { type: 'object', properties: {}, required: [] },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'get_tsconfig',
+      description: 'Get the tsconfig.json from the test repo.',
+      parameters: { type: 'object', properties: {}, required: [] },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'get_playwright_config',
+      description: 'Get the playwright.config.ts from the test repo.',
+      parameters: { type: 'object', properties: {}, required: [] },
+    },
+  },
+];
+
+// ─── Spec read tools (branch-specific, only for agents that need to read existing specs) ─
+// get_skeleton_spec, get_parent_spec, get_existing_tests.
+// Not given to explorer (no need) or review agent (spec is pre-fetched and injected).
+
+export const specReadToolDefs: AgentTool[] = [
+  {
+    type: 'function',
+    function: {
       name: 'get_existing_tests',
       description: 'Get all existing spec files for a feature from the test repo tests/web/{feature}/.',
       parameters: {
@@ -89,21 +138,6 @@ export const repoToolDefs: AgentTool[] = [
   {
     type: 'function',
     function: {
-      name: 'get_current_pom',
-      description: 'Get the current POM file from the QA branch (may have been updated in a previous step).',
-      parameters: {
-        type: 'object',
-        properties: {
-          branch: { type: 'string' },
-          feature: { type: 'string' },
-        },
-        required: ['branch', 'feature'],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
       name: 'get_parent_spec',
       description: 'Get the parent ticket spec file from the QA branch (used in rework flows).',
       parameters: {
@@ -117,31 +151,10 @@ export const repoToolDefs: AgentTool[] = [
       },
     },
   },
-  {
-    type: 'function',
-    function: {
-      name: 'list_available_poms',
-      description: 'List all existing Page Object Model files in the test repo pages/ directory. Use this before writing imports to ensure you only import POMs that actually exist.',
-      parameters: { type: 'object', properties: {}, required: [] },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'get_tsconfig',
-      description: 'Get the tsconfig.json from the test repo.',
-      parameters: { type: 'object', properties: {}, required: [] },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'get_playwright_config',
-      description: 'Get the playwright.config.ts from the test repo.',
-      parameters: { type: 'object', properties: {}, required: [] },
-    },
-  },
 ];
+
+// ─── Backwards-compat export — includes both sets, used by qaTools (legacy) ───
+export const repoToolDefs: AgentTool[] = [...repoReadToolDefs, ...specReadToolDefs];
 
 export function createRepoToolHandlers(repoName: string): ToolHandlers {
   return {
