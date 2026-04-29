@@ -45,7 +45,7 @@ function checkSpecConventions(specContent: string, personaMap: PersonaMap): stri
   // Dynamic persona check
   for (const str of forbiddenStrings) {
     const escaped = str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const regex = new RegExp(`(?<!personas\\.\\w+\\.)\\b${escaped}\\b`, 'i');
+    const regex = new RegExp(`(?<!personas\\.)\\b${escaped}\\b`, 'i');
     if (regex.test(specContent)) {
       violations.push(
         `Spec contains hardcoded persona data ("${str}"). ` +
@@ -249,22 +249,28 @@ export async function runWithSelfCorrection(
     // Session may already be closed — ignore
   }
 
-  // Step 2: Convention check — catches pattern violations that tsc cannot
+  // Step 2: Convention check — fix one violation at a time, re-check after each fix.
+  // Capped at maxAttempts to prevent infinite loops if the fix agent keeps reintroducing issues.
   const personaMap = await getPersonas(repoName, []);
-  const specViolations = checkSpecConventions(specContent, personaMap);
-  const pomViolations = checkPomConventions(poms, personaMap);
-  const allViolations = [...specViolations, ...pomViolations];
+  const MAX_CONVENTION_ROUNDS = maxAttempts;
 
-  if (allViolations.length > 0) {
-    log('WARN', `[selfCorrection] ${allViolations.length} convention violation(s) found`);
-    dashboardBus.emitEvent('correction', 'warn', 'Convention violations detected', { violations: allViolations });
+  for (let round = 1; round <= MAX_CONVENTION_ROUNDS; round++) {
+    const specViolations = checkSpecConventions(specContent, personaMap);
+    const pomViolations = checkPomConventions(poms, personaMap);
+    const allViolations = [...specViolations, ...pomViolations];
 
-    const violationList = allViolations.map((v, i) => `${i + 1}. ${v}`).join('\n');
+    if (allViolations.length === 0) break;
+
+    // Take only the first violation — surgical fix, then re-check
+    const violation = allViolations[0];
+    log('WARN', `[selfCorrection] Convention violation (round ${round}/${MAX_CONVENTION_ROUNDS}): ${violation}`);
+    dashboardBus.emitEvent('correction', 'warn', `Convention violation (round ${round})`, { violation });
+
     const pomSummary = poms.map((p) => `### ${p.pomPath}\n${p.pomContent}`).join('\n\n');
 
     const { args, tokenUsage: fixUsage } = await runAgent(
-      'Fix the convention violations listed below in this Playwright spec and/or POM files. Fix ONLY what is listed — do not change any other logic.',
-      `VIOLATIONS:\n${violationList}\n\n### Spec\n${specContent}\n\n${pomSummary}`,
+      'Fix the single convention violation listed below in this Playwright spec and/or POM files. Fix ONLY what is listed — do not change any other logic.',
+      `VIOLATION:\n${violation}\n\n### Spec\n${specContent}\n\n${pomSummary}`,
       conventionOnlyTools,
       validateTypescriptHandler,
       { maxIterations: 10 },
@@ -281,16 +287,15 @@ export async function runWithSelfCorrection(
       }
     }
 
-    log('INFO', '[selfCorrection] Convention corrections applied');
-    dashboardBus.emitEvent('correction', 'info', 'Convention corrections applied', { tokenUsage: fixUsage });
+    log('INFO', `[selfCorrection] Convention fix applied (round ${round})`);
+    dashboardBus.emitEvent('correction', 'info', `Convention fix applied (round ${round})`, { tokenUsage: fixUsage });
 
-    // Re-check after fix — warn if violations remain (don't loop, just surface them)
-    const remainingSpecViolations = checkSpecConventions(specContent, personaMap);
-    const remainingPomViolations = checkPomConventions(poms, personaMap);
-    const remainingViolations = [...remainingSpecViolations, ...remainingPomViolations];
-    if (remainingViolations.length > 0) {
-      log('WARN', `[selfCorrection] ${remainingViolations.length} convention violation(s) remain after fix: ${remainingViolations.join('; ')}`);
-      dashboardBus.emitEvent('correction', 'warn', 'Convention violations remain after fix', { violations: remainingViolations });
+    if (round === MAX_CONVENTION_ROUNDS) {
+      const remaining = [...checkSpecConventions(specContent, personaMap), ...checkPomConventions(poms, personaMap)];
+      if (remaining.length > 0) {
+        log('WARN', `[selfCorrection] ${remaining.length} convention violation(s) remain after ${MAX_CONVENTION_ROUNDS} rounds: ${remaining.join('; ')}`);
+        dashboardBus.emitEvent('correction', 'warn', 'Convention violations remain after max rounds', { violations: remaining });
+      }
     }
   }
 

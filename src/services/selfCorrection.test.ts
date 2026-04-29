@@ -158,34 +158,66 @@ describe('runWithSelfCorrection', () => {
     expect(result.tokenUsage.totalTokens).toBe(150 + 15 + 30);
   });
 
-  it('collects all persona property violations — not just the first', async () => {
+  it('fixes violations one at a time — fix agent called once per violation round', async () => {
     // Spec with two distinct invented persona properties
-    const specWithMultipleViolations =
+    const specWithTwoViolations =
       'import { test } from "../../../fixtures";\n' +
       'import { personas } from "../../../config/personas";\n' +
       'test("t", async ({ authPage }) => {\n' +
-      '  await authPage.welcome(personas.patient.firstName);\n' +   // firstName invalid
-      '  await authPage.expectUrl(personas.patient.route);\n' +     // route invalid
+      '  await authPage.welcome(personas.patient.firstName);\n' +
+      '  await authPage.expectUrl(personas.patient.route);\n' +
       '});';
 
-    const personaMap = { patient: { email: 'a@b.com', password: 'pw', displayName: 'Jane Doe', role: 'patient' } };
-    const { getPersonas } = await import('./personas');
-    (getPersonas as jest.Mock).mockResolvedValueOnce(personaMap);
+    // After first fix: firstName gone, route still present
+    const specAfterFirstFix =
+      'import { test } from "../../../fixtures";\n' +
+      'import { personas } from "../../../config/personas";\n' +
+      'test("t", async ({ authPage }) => {\n' +
+      '  await authPage.welcome(personas.patient.displayName);\n' +
+      '  await authPage.expectUrl(personas.patient.route);\n' +
+      '});';
 
-    const fixedSpec = 'import { test } from "../../../fixtures";\ntest("t", async ({ authPage }) => {});';
+    // After second fix: both gone
+    const specFullyFixed =
+      'import { test } from "../../../fixtures";\n' +
+      'import { personas } from "../../../config/personas";\n' +
+      'test("t", async ({ authPage }) => {\n' +
+      '  await authPage.welcome(personas.patient.displayName);\n' +
+      '  await authPage.expectUrl(/\\/dashboard/);\n' +
+      '});';
+
+    // Use a persona where key != role value to avoid triggering the forbidden-string check
+    // on `personas.user.firstName` (key "user" is not a forbidden string here)
+    const personaMap = { user: { email: 'a@b.com', password: 'pw', displayName: 'Jane Doe', role: 'member' } };
+    const { getPersonas } = await import('./personas');
+    (getPersonas as jest.Mock).mockResolvedValue(personaMap);
+
     mockValidateTs.mockResolvedValue(valid);
-    mockRunQaAgent.mockResolvedValueOnce({ ...baseQaResult, enrichedSpec: specWithMultipleViolations });
-    mockRunAgent.mockResolvedValue(makeFixResult(fixedSpec));
+    mockRunQaAgent.mockResolvedValueOnce({
+      ...baseQaResult,
+      enrichedSpec: specWithTwoViolations.replace(/patient/g, 'user'),
+    });
+    const specAfterFirstFixUser = specAfterFirstFix.replace(/patient/g, 'user');
+    const specFullyFixedUser = specFullyFixed.replace(/patient/g, 'user');
+    // First round fixes firstName, second round fixes route
+    mockRunAgent
+      .mockResolvedValueOnce(makeFixResult(specAfterFirstFixUser))
+      .mockResolvedValueOnce(makeFixResult(specFullyFixedUser));
 
     await runWithSelfCorrection(baseTask, 'qa/42-test');
 
-    // Fix agent should have been called with BOTH violations in its user message
-    expect(mockRunAgent).toHaveBeenCalledWith(
-      expect.stringContaining('Fix the convention violations'),
-      expect.stringContaining('personas.patient.firstName') && expect.stringContaining('personas.patient.route'),
-      expect.any(Array),
-      expect.any(Object),
-      expect.any(Object),
+    // Fix agent called exactly twice — once per violation
+    expect(mockRunAgent).toHaveBeenCalledTimes(2);
+    // Each call receives a single violation
+    expect(mockRunAgent).toHaveBeenNthCalledWith(1,
+      expect.stringContaining('single convention violation'),
+      expect.stringContaining('personas.user.firstName'),
+      expect.any(Array), expect.any(Object), expect.any(Object),
+    );
+    expect(mockRunAgent).toHaveBeenNthCalledWith(2,
+      expect.stringContaining('single convention violation'),
+      expect.stringContaining('personas.user.route'),
+      expect.any(Array), expect.any(Object), expect.any(Object),
     );
   });
 
