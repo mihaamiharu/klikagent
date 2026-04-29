@@ -74,7 +74,7 @@ describe('runAgent', () => {
     expect(tokenUsage.promptTokens).toBe(100);
     expect(tokenUsage.completionTokens).toBe(50);
     expect(tokenUsage.totalTokens).toBe(150);
-    expect(tokenUsage.costUSD).toBeCloseTo(0.001, 5);
+    expect(tokenUsage.costUSD).toBeCloseTo(0.00009, 8);
   });
 
   it('accumulates tokens across multiple iterations', async () => {
@@ -89,7 +89,7 @@ describe('runAgent', () => {
     expect(tokenUsage.promptTokens).toBe(300);
     expect(tokenUsage.completionTokens).toBe(70);
     expect(tokenUsage.totalTokens).toBe(370);
-    expect(tokenUsage.costUSD).toBeCloseTo(0.0022, 5);
+    expect(tokenUsage.costUSD).toBeCloseTo(0.000174, 8);
   });
 
   it('handles missing usage field without crashing (treats as zero)', async () => {

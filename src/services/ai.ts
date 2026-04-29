@@ -48,8 +48,8 @@ export interface RunAgentOptions {
 }
 
 // MiniMax M2.7 pricing (per 1M tokens) — update if model changes
-const PROMPT_COST_PER_M = 5;    // USD per 1M prompt tokens
-const COMPLETION_COST_PER_M = 10; // USD per 1M completion tokens
+const PROMPT_COST_PER_M = 0.3;    // USD per 1M prompt tokens
+const COMPLETION_COST_PER_M = 1.2; // USD per 1M completion tokens
 
 export interface TokenUsage {
   promptTokens: number;
