@@ -81,10 +81,10 @@ app.post('/reviews', (req: Request, res: Response) => {
   log('INFO', `POST /reviews — pr=#${ctx.prNumber} branch="${ctx.branch}" reviewer=${ctx.reviewerLogin}`);
   res.status(202).json({ received: true, prNumber: ctx.prNumber });
 
-  // Derive feature from branch name: qa/<ticketId>-<feature>-* → second segment after ticketId
-  // e.g. "qa/42-auth-login-form" → "auth"; undefined if branch format doesn't match
-  const featureMatch = ctx.branch.match(/^qa\/\d+-([^-]+)/);
-  const feature = featureMatch ? featureMatch[1] : undefined;
+  // Derive feature from specPath — more reliable than branch name parsing
+  // e.g. "tests/web/auth/qa-auth-flow-login.spec.ts" → "auth"
+  const featureMatch = ctx.specPath.match(/^tests\/web\/([^/]+)\//);
+  const feature = featureMatch?.[1];
 
   // Strip owner prefix from outputRepo — testRepo functions expect just the repo name
   const repoName = ctx.outputRepo.includes('/') ? ctx.outputRepo.split('/').pop()! : ctx.outputRepo;
