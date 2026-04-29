@@ -89,6 +89,7 @@ const UNCACHEABLE_TOOLS = new Set([
   'browser_click',
   'browser_fill',
   'browser_list_interactables',
+  'browser_command',
   'browser_close',
 ]);
 
