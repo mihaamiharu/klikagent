@@ -85,13 +85,23 @@ export const reviewDoneTool: AgentTool = {
   type: 'function',
   function: {
     name: 'done',
-    description: 'Submit the fixed spec, updated POM, and reply text for each review comment.',
+    description: 'Submit the fixed spec, any updated files, and reply text for each review comment.',
     parameters: {
       type: 'object',
       properties: {
         fixedSpec: { type: 'string', description: 'Fixed spec file content' },
-        pomContent: { type: 'string', description: 'Updated POM file content' },
-        pomPath: { type: 'string', description: 'Repo-relative path to write the POM file e.g. "pages/doctors/DoctorProfilePage.ts". Must match the exported class name exactly.' },
+        files: {
+          type: 'array',
+          description: 'Any additional files that need to be updated to fix the review (POMs, fixtures, config/personas.ts, etc.). Only include files that actually changed.',
+          items: {
+            type: 'object',
+            properties: {
+              path: { type: 'string', description: 'Repo-relative file path e.g. "pages/auth/AuthPage.ts", "config/personas.ts", "fixtures/index.ts"' },
+              content: { type: 'string', description: 'Full updated file content' },
+            },
+            required: ['path', 'content'],
+          },
+        },
         commentReplies: {
           type: 'array',
           description: 'Reply for each inline review comment',
@@ -105,7 +115,7 @@ export const reviewDoneTool: AgentTool = {
           },
         },
       },
-      required: ['fixedSpec', 'pomContent', 'pomPath', 'commentReplies'],
+      required: ['fixedSpec', 'files', 'commentReplies'],
     },
   },
 };

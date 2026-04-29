@@ -99,11 +99,11 @@ app.post('/reviews', (req: Request, res: Response) => {
       log('INFO', `[reviews] Committed fixed spec to ${ctx.specPath}`);
       dashboardBus.emitEvent('github', 'info', `Committed fixed spec: ${ctx.specPath}`, { specPath: ctx.specPath });
 
-      // Commit updated POM to branch
-      if (result.pomPath && result.pomContent) {
-        await commitFile(repoName, ctx.branch, result.pomPath, result.pomContent, `fix(pom): update ${feature} POM for PR #${ctx.prNumber} [klikagent]`);
-        log('INFO', `[reviews] Committed updated POM to ${result.pomPath}`);
-        dashboardBus.emitEvent('github', 'info', `Committed updated POM: ${result.pomPath}`, { pomPath: result.pomPath });
+      // Commit any additional changed files (POMs, personas, fixtures, etc.)
+      for (const { path, content } of result.files) {
+        await commitFile(repoName, ctx.branch, path, content, `fix: update ${path} for PR #${ctx.prNumber} [klikagent]`);
+        log('INFO', `[reviews] Committed ${path}`);
+        dashboardBus.emitEvent('github', 'info', `Committed: ${path}`, { path });
       }
 
       // Post replies to each review comment

@@ -16,7 +16,8 @@ Rules:
 - Keep the same coding style as the existing spec
 - Use relative imports — never @pages, @helpers, @data aliases
 - Call validate_typescript before done()
-- Call done() with fixedSpec, pomContent, and a commentReplies entry for every comment id`;
+- Call done() with fixedSpec, files (any changed files beyond the spec), and a commentReplies entry for every comment id
+- Include in files[] any POM, config/personas.ts, fixtures/index.ts, or other file that needs updating — only files that actually changed`;
 
 function buildUserMessage(ctx: ReviewContext, feature: string | undefined, specContent: string | null): string {
   const comments = ctx.comments
@@ -51,7 +52,7 @@ ${specSection}
 4. Call validate_typescript to confirm the fixed spec compiles
 5. Call done() with:
    - fixedSpec: the complete fixed spec file
-   - pomContent: the complete POM file (updated if needed)
+   - files: array of any other files that changed — POMs, config/personas.ts, fixtures/index.ts, etc. Empty array if only the spec changed.
    - commentReplies: one entry per comment id with your reply text
 `.trim();
 }
@@ -62,8 +63,7 @@ export async function runReviewAgent(
   repoName: string,
 ): Promise<{
   fixedSpec: string;
-  pomContent: string;
-  pomPath: string;
+  files: Array<{ path: string; content: string }>;
   commentReplies: Array<{ commentId: number; body: string }>;
   tokenUsage: TokenUsage;
 }> {
@@ -79,8 +79,7 @@ export async function runReviewAgent(
   );
   return {
     fixedSpec: args.fixedSpec as string,
-    pomContent: args.pomContent as string,
-    pomPath: args.pomPath as string,
+    files: (args.files as Array<{ path: string; content: string }>) ?? [],
     commentReplies: args.commentReplies as Array<{ commentId: number; body: string }>,
     tokenUsage,
   };
