@@ -158,6 +158,37 @@ describe('runWithSelfCorrection', () => {
     expect(result.tokenUsage.totalTokens).toBe(150 + 15 + 30);
   });
 
+  it('collects all persona property violations — not just the first', async () => {
+    // Spec with two distinct invented persona properties
+    const specWithMultipleViolations =
+      'import { test } from "../../../fixtures";\n' +
+      'import { personas } from "../../../config/personas";\n' +
+      'test("t", async ({ authPage }) => {\n' +
+      '  await authPage.welcome(personas.patient.firstName);\n' +   // firstName invalid
+      '  await authPage.expectUrl(personas.patient.route);\n' +     // route invalid
+      '});';
+
+    const personaMap = { patient: { email: 'a@b.com', password: 'pw', displayName: 'Jane Doe', role: 'patient' } };
+    const { getPersonas } = await import('./personas');
+    (getPersonas as jest.Mock).mockResolvedValueOnce(personaMap);
+
+    const fixedSpec = 'import { test } from "../../../fixtures";\ntest("t", async ({ authPage }) => {});';
+    mockValidateTs.mockResolvedValue(valid);
+    mockRunQaAgent.mockResolvedValueOnce({ ...baseQaResult, enrichedSpec: specWithMultipleViolations });
+    mockRunAgent.mockResolvedValue(makeFixResult(fixedSpec));
+
+    await runWithSelfCorrection(baseTask, 'qa/42-test');
+
+    // Fix agent should have been called with BOTH violations in its user message
+    expect(mockRunAgent).toHaveBeenCalledWith(
+      expect.stringContaining('Fix the convention violations'),
+      expect.stringContaining('personas.patient.firstName') && expect.stringContaining('personas.patient.route'),
+      expect.any(Array),
+      expect.any(Object),
+      expect.any(Object),
+    );
+  });
+
   it('passes the correct error context to the fix agent', async () => {
     const fixedSpec = 'import { test } from "@playwright/test";\ntest("fixed", async () => {});';
     mockValidateTs

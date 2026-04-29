@@ -91,27 +91,36 @@ function checkSpecConventions(specContent: string, personaMap: PersonaMap): stri
   }
 
   // Check for invented persona keys (personas.nonExistent) or invented properties (personas.patient.firstName)
+  // Use a Set to avoid duplicate violations for the same key/prop used multiple times
+  const reportedPersonaViolations = new Set<string>();
   const personaAccessPattern = /personas\.(\w+)\.(\w+)/g;
   let personaAccessMatch: RegExpExecArray | null;
   while ((personaAccessMatch = personaAccessPattern.exec(specContent)) !== null) {
     const key = personaAccessMatch[1];
     const prop = personaAccessMatch[2];
     if (!(key in personaMap)) {
-      const validKeys = Object.keys(personaMap).join(', ');
-      violations.push(
-        `Spec references \`personas.${key}\` which is not a valid persona key. ` +
-        `Valid keys are: ${validKeys}. ` +
-        `For deliberately-invalid credentials, use a string literal like 'nonexistent@example.com' instead of inventing a persona key.`,
-      );
-      break;
+      const violationKey = `key:${key}`;
+      if (!reportedPersonaViolations.has(violationKey)) {
+        reportedPersonaViolations.add(violationKey);
+        const validKeys = Object.keys(personaMap).join(', ');
+        violations.push(
+          `Spec references \`personas.${key}\` which is not a valid persona key. ` +
+          `Valid keys are: ${validKeys}. ` +
+          `For deliberately-invalid credentials, use a string literal like 'nonexistent@example.com' instead of inventing a persona key.`,
+        );
+      }
+      continue;
     }
     const validProps = Object.keys(personaMap[key]);
     if (!validProps.includes(prop)) {
-      violations.push(
-        `Spec references \`personas.${key}.${prop}\` which is not a valid property on that persona. ` +
-        `Valid properties for \`personas.${key}\` are: ${validProps.join(', ')}.`,
-      );
-      break;
+      const violationKey = `prop:${key}.${prop}`;
+      if (!reportedPersonaViolations.has(violationKey)) {
+        reportedPersonaViolations.add(violationKey);
+        violations.push(
+          `Spec references \`personas.${key}.${prop}\` which is not a valid property on that persona. ` +
+          `Valid properties for \`personas.${key}\` are: ${validProps.join(', ')}.`,
+        );
+      }
     }
   }
 
@@ -274,6 +283,15 @@ export async function runWithSelfCorrection(
 
     log('INFO', '[selfCorrection] Convention corrections applied');
     dashboardBus.emitEvent('correction', 'info', 'Convention corrections applied', { tokenUsage: fixUsage });
+
+    // Re-check after fix — warn if violations remain (don't loop, just surface them)
+    const remainingSpecViolations = checkSpecConventions(specContent, personaMap);
+    const remainingPomViolations = checkPomConventions(poms, personaMap);
+    const remainingViolations = [...remainingSpecViolations, ...remainingPomViolations];
+    if (remainingViolations.length > 0) {
+      log('WARN', `[selfCorrection] ${remainingViolations.length} convention violation(s) remain after fix: ${remainingViolations.join('; ')}`);
+      dashboardBus.emitEvent('correction', 'warn', 'Convention violations remain after fix', { violations: remainingViolations });
+    }
   }
 
   // Step 3: TypeScript validation loop — up to maxAttempts corrections
