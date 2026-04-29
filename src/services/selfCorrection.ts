@@ -2,7 +2,7 @@ import { QATask, CiTestFailure } from '../types';
 import { PersonaMap } from './personas';
 import { runQaAgent } from '../agents/qaAgent';
 import { runAgent, TokenUsage } from './ai';
-import { validateTypescriptHandler, validateTypescriptTool } from '../agents/tools/outputTools';
+import { validateTypescriptHandler, validateTypescriptTool, PAGE_GETBY_IN_SPEC_PATTERN } from '../agents/tools/outputTools';
 import { qaTools, createQaHandlers, browserHandlers } from '../agents/tools';
 import { maxSelfCorrectionAttempts } from './testRepoClone';
 import { log } from '../utils/logger';
@@ -34,9 +34,9 @@ function checkSpecConventions(specContent: string, personaMap: PersonaMap): stri
   const violations: string[] = [];
   const forbiddenStrings = getForbiddenPersonaStrings(personaMap);
 
-  if (/(?<!expect\(\s*)page\.(?:locator|getBy(?:Role|Text|Label|Placeholder|AltText|Title|TestId))\b/.test(specContent)) {
+  if (PAGE_GETBY_IN_SPEC_PATTERN.test(specContent)) {
     violations.push(
-      'Spec contains direct `page.locator` or `page.getBy*` calls outside of assertions. ' +
+      'Spec contains direct `page.locator` or `page.getBy*` calls. ' +
       'All element interactions MUST be encapsulated within a Page Object Model (POM). ' +
       'Add properties or methods to your POM and use them in the spec instead (e.g. `await authPage.emailInput.fill(email)` NOT `await page.getByLabel("Email").fill(email)`).'
     );
@@ -90,17 +90,26 @@ function checkSpecConventions(specContent: string, personaMap: PersonaMap): stri
     }
   }
 
-  // Check for invented persona keys — catches cases where the agent fabricates keys like personas.nonExistent
-  const personaKeyPattern = /personas\.(\w+)\./g;
-  let personaKeyMatch: RegExpExecArray | null;
-  while ((personaKeyMatch = personaKeyPattern.exec(specContent)) !== null) {
-    const key = personaKeyMatch[1];
+  // Check for invented persona keys (personas.nonExistent) or invented properties (personas.patient.firstName)
+  const personaAccessPattern = /personas\.(\w+)\.(\w+)/g;
+  let personaAccessMatch: RegExpExecArray | null;
+  while ((personaAccessMatch = personaAccessPattern.exec(specContent)) !== null) {
+    const key = personaAccessMatch[1];
+    const prop = personaAccessMatch[2];
     if (!(key in personaMap)) {
       const validKeys = Object.keys(personaMap).join(', ');
       violations.push(
         `Spec references \`personas.${key}\` which is not a valid persona key. ` +
         `Valid keys are: ${validKeys}. ` +
         `For deliberately-invalid credentials, use a string literal like 'nonexistent@example.com' instead of inventing a persona key.`,
+      );
+      break;
+    }
+    const validProps = Object.keys(personaMap[key]);
+    if (!validProps.includes(prop)) {
+      violations.push(
+        `Spec references \`personas.${key}.${prop}\` which is not a valid property on that persona. ` +
+        `Valid properties for \`personas.${key}\` are: ${validProps.join(', ')}.`,
       );
       break;
     }
@@ -114,17 +123,9 @@ function checkPomConventions(poms: Pom[], personaMap: PersonaMap): string[] {
   const forbiddenStrings = getForbiddenPersonaStrings(personaMap);
 
   for (const { pomContent, pomPath } of poms) {
-    if (/Welcome back,\s*\w+/.test(pomContent)) {
-      violations.push(
-        `${pomPath}: POM assertion method contains a hardcoded persona name (e.g. "Welcome back, Jane!"). ` +
-        'POM helpers must be persona-agnostic. Accept the name as a parameter ' +
-        '(`expectOnDashboard(expectedName?: string)`) or remove the heading check and let the test assert it.',
-      );
-    }
-
     for (const str of forbiddenStrings) {
       const escaped = str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      const regex = new RegExp(`(['"])${escaped}\\1`, 'i');
+      const regex = new RegExp(`\\b${escaped}\\b`, 'i');
       if (regex.test(pomContent)) {
         violations.push(
           `${pomPath}: POM contains hardcoded persona data ("${str}"). ` +
@@ -436,7 +437,7 @@ Feature: ${feature}
 
 Navigate to the relevant pages to verify actual values, then fix only the failing assertions.`;
 
-  const { args, tokenUsage } = await runAgent(
+  const { args, tokenUsage: agentUsage } = await runAgent(
     CI_FIX_SYSTEM_PROMPT,
     userMessage,
     ciFixTools,
@@ -444,11 +445,38 @@ Navigate to the relevant pages to verify actual values, then fix only the failin
     { maxIterations: 25 },
   );
 
-  const fixedSpec = args.fixedSpec as string;
+  let fixedSpec = args.fixedSpec as string;
   const fixedPoms = (args.fixedPoms as Pom[] | undefined) ?? [];
+  let tokenUsage = agentUsage;
 
   log('INFO', `[ciFailureFix] Fix agent completed — $${tokenUsage.costUSD.toFixed(4)} USD`);
   dashboardBus.emitEvent('correction', 'info', 'CI failure fix applied', { tokenUsage });
+
+  // Structural guard: verify the agent actually validated before calling done().
+  // The system prompt asks for validate_typescript → done(), but nothing prevents skipping it.
+  const tsResultRaw = await validateTypescriptHandler.validate_typescript({ code: fixedSpec, fileType: 'spec' });
+  const tsResult = JSON.parse(
+    typeof tsResultRaw === 'string' ? tsResultRaw : JSON.stringify(tsResultRaw)
+  ) as { valid: boolean; errors: Array<{ line: number; message: string }> };
+
+  if (!tsResult.valid) {
+    log('WARN', `[ciFailureFix] TypeScript errors in agent output — running one TS fix pass`);
+    dashboardBus.emitEvent('validation', 'warn', 'CI fix output has TS errors — correcting', { errors: tsResult.errors });
+
+    const tsErrors = tsResult.errors.map((e) => `Line ${e.line}: ${e.message}`).join('\n');
+    const { args: fixArgs, tokenUsage: fixUsage } = await runAgent(
+      'Fix the TypeScript errors in this Playwright spec. Output only the corrected spec content.',
+      `TypeScript errors:\n${tsErrors}\n\nSpec:\n${fixedSpec}`,
+      fixTools,
+      validateTypescriptHandler,
+      { maxIterations: 10 },
+    );
+    fixedSpec = fixArgs.fixedSpec as string;
+    tokenUsage = addTokenUsage(tokenUsage, fixUsage);
+
+    log('INFO', `[ciFailureFix] TS fix pass complete — $${tokenUsage.costUSD.toFixed(4)} USD total`);
+    dashboardBus.emitEvent('correction', 'info', 'CI fix TS correction applied', { tokenUsage: fixUsage });
+  }
 
   return { specContent: fixedSpec, poms: fixedPoms, specPath, tokenUsage };
 }
