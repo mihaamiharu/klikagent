@@ -1,4 +1,4 @@
-import { CIResult, PR, PRComment, ReviewComment } from '../types';
+import { CIResult, PR, PRComment } from '../types';
 import { log } from '../utils/logger';
 
 const GITHUB_API = 'https://api.github.com';
@@ -89,12 +89,6 @@ export async function getPRComments(prNumber: number, repo: string): Promise<PRC
   return data.map((c) => ({ id: c.id, body: c.body, userLogin: c.user.login, createdAt: c.created_at }));
 }
 
-export async function getReviewComments(prNumber: number, reviewId: number, repo: string): Promise<ReviewComment[]> {
-  const res = await ghRequest(`/repos/${ownerName()}/${repo}/pulls/${prNumber}/reviews/${reviewId}/comments`);
-  if (!res.ok) throw new Error(`getReviewComments: ${res.status}`);
-  const data = await res.json() as Array<{ id: number; path: string; line: number | null; body: string; diff_hunk: string }>;
-  return data.map((c) => ({ id: c.id, path: c.path, line: c.line, body: c.body, diffHunk: c.diff_hunk }));
-}
 
 export async function replyToReviewComment(prNumber: number, repo: string, commentId: number, body: string): Promise<void> {
   const res = await ghRequest(
