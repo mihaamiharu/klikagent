@@ -5,7 +5,6 @@ import { orchestrate } from '../orchestrator';
 import { runReviewAgent } from '../agents/reviewAgent';
 import { provisionRepo } from '../services/repoProvisioner';
 import { commitFile, replyToReviewComment } from '../services/github';
-import { getSpecPath } from '../services/testRepo';
 import { log } from '../utils/logger';
 import { dashboardRoutes } from '../dashboard/routes';
 import { runStore } from '../dashboard/runStore';
@@ -55,8 +54,8 @@ app.post('/tasks', (req: Request, res: Response) => {
 app.post('/reviews', (req: Request, res: Response) => {
   const body = req.body as Partial<ReviewContext>;
 
-  if (!body.prNumber || !body.branch || !body.ticketId || !body.reviewId || !body.reviewerLogin || !body.outputRepo) {
-    res.status(400).json({ error: 'Missing required fields: prNumber, branch, ticketId, reviewId, reviewerLogin, outputRepo' });
+  if (!body.prNumber || !body.branch || !body.ticketId || !body.reviewId || !body.reviewerLogin || !body.outputRepo || !body.specPath) {
+    res.status(400).json({ error: 'Missing required fields: prNumber, branch, ticketId, reviewId, reviewerLogin, outputRepo, specPath' });
     return;
   }
 
@@ -76,6 +75,7 @@ app.post('/reviews', (req: Request, res: Response) => {
     reviewId: body.reviewId,
     reviewerLogin: body.reviewerLogin,
     comments: body.comments ?? [],
+    specPath: body.specPath,
   };
 
   log('INFO', `POST /reviews — pr=#${ctx.prNumber} branch="${ctx.branch}" reviewer=${ctx.reviewerLogin}`);
@@ -94,15 +94,10 @@ app.post('/reviews', (req: Request, res: Response) => {
     try {
       const result = await runReviewAgent(ctx, feature, repoName);
 
-      // Commit fixed spec to branch
-      const specPath = await getSpecPath(repoName, ctx.branch, ctx.ticketId, feature ?? '');
-      if (specPath) {
-        await commitFile(repoName, ctx.branch, specPath, result.fixedSpec, `fix(spec): address review on PR #${ctx.prNumber} [klikagent]`);
-        log('INFO', `[reviews] Committed fixed spec to ${specPath}`);
-        dashboardBus.emitEvent('github', 'info', `Committed fixed spec: ${specPath}`, { specPath });
-      } else {
-        log('WARN', `[reviews] Could not locate spec file for ticketId=${ctx.ticketId} feature=${feature} on branch ${ctx.branch}`);
-      }
+      // Commit fixed spec to branch — specPath is known from the trigger payload
+      await commitFile(repoName, ctx.branch, ctx.specPath, result.fixedSpec, `fix(spec): address review on PR #${ctx.prNumber} [klikagent]`);
+      log('INFO', `[reviews] Committed fixed spec to ${ctx.specPath}`);
+      dashboardBus.emitEvent('github', 'info', `Committed fixed spec: ${ctx.specPath}`, { specPath: ctx.specPath });
 
       // Commit updated POM to branch
       if (result.pomPath && result.pomContent) {
