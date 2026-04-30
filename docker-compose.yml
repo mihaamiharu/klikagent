@@ -9,7 +9,9 @@ services:
       - AI_API_KEY
       - AI_BASE_URL
       - AI_MODEL
-      - GITHUB_TOKEN
+      - GH_APP_ID
+      - GH_PRIVATE_KEY
+      - GH_INSTALLATION_ID
       - GITHUB_OWNER
       - GITHUB_TEST_REPO
       - QA_ENV_URL
