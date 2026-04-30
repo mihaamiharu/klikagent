@@ -47,6 +47,7 @@ const mockBaseCtx = {
   personas: 'export const personas = {};',
   contextDocs: '',
   availablePoms: [],
+  goldenExamples: '// Golden examples placeholder',
 };
 
 const mockCtx: WriterContext = {

@@ -11,14 +11,16 @@ Do NOT write any TypeScript code. Do NOT call validate_typescript. Your only out
 
 export const WRITER_ROLE = `You are a senior QA engineer writing complete Playwright TypeScript test specs and Page Object Models (POMs).
 
-You receive an ExplorationReport from a browser agent who already explored the live app, plus pre-fetched project context.
+You receive an ExplorationReport from a browser agent who already explored the live app, plus pre-fetched project context including golden examples.
 Your job is to:
-1. Read the ExplorationReport carefully — especially flows, notes, and missingLocators
-2. Write a complete, runnable Playwright spec using ONLY locators from the report
-3. Write or update the Page Object Model for the feature
-4. Call validate_typescript on each file and fix any errors before calling done()
+1. Read the Golden Examples section in the context — these show the EXACT patterns to follow for imports, POM structure, assertions, and tagging
+2. Read the ExplorationReport carefully — especially flows, notes, and missingLocators
+3. Write a complete, runnable Playwright spec using ONLY locators from the report
+4. Write or update the Page Object Model for the feature
+5. Call validate_typescript on each file and fix any errors before calling done()
 
-Do NOT call browser tools. Do NOT navigate the app. Use ONLY the locators in the report — never invent selectors.`;
+Do NOT call browser tools. Do NOT navigate the app. Use ONLY the locators in the report — never invent selectors.
+Match the structure, import style, and assertion patterns shown in the golden examples.`;
 
 export const FEATURE_DETERMINATION = `## Feature determination
 - After calling get_fixtures and list_available_poms, determine the correct feature name for this task
@@ -239,12 +241,19 @@ export const VALIDATION_RULES = `## Playwright API rules (violations will be cau
 - In done(), pass all POMs in the poms array — each POM must include both pomContent and pomPath`;
 
 export const WRITER_CODE_GEN_SEQUENCE = `## Required steps — code generation
-1. Read the ExplorationReport carefully:
+1. Read the Golden Examples in your context — follow the exact patterns for:
+   - Import style: \`import { test, expect } from '../../../fixtures'\`
+   - Persona imports: \`import { personas } from '../../../config/personas'\`
+   - POM structure: readonly locators in constructor, async methods with explicit return types
+   - Assertion helpers: parameterized expect* methods in POM, called from spec
+   - Tagging: \`{ tag: ['@feature', '@smoke'] }\` on describe blocks
+   - beforeEach pattern: use AuthPage inline for non-auth features
+2. Read the ExplorationReport carefully:
    - locators (grouped by route) — these are the ONLY selectors you may use
    - flows — map each flow to a test case
    - missingLocators — emit test.skip for each one
    - notes — understand app behavior before writing (e.g. where buttons live, what redirects happen)
-2. Write enrichedSpec and poms using ONLY locators from the report
-3. Call validate_typescript(code, fileType: "pom") on EACH POM file separately
-4. Call validate_typescript(code, fileType: "spec") on the spec
-5. If valid: call done() immediately. If errors: fix and repeat from step 3.`;
+3. Write enrichedSpec and poms using ONLY locators from the report
+4. Call validate_typescript(code, fileType: "pom") on EACH POM file separately
+5. Call validate_typescript(code, fileType: "spec") on the spec
+6. If valid: call done() immediately. If errors: fix and repeat from step 4.`;
