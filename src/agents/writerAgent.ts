@@ -90,7 +90,7 @@ Using the ExplorationReport above:
 1. Write a complete Playwright spec at tests/web/${report.feature}/${task.taskId}-<slug>.spec.ts
    - Import: import { test, expect } from '../../../fixtures';
    - Import: import { personas } from '../../../config/personas';
-   - Use fixture parameters for any POM registered in fixtures/index.ts
+   - Always use fixture parameters for POMs — if you create a new POM, you MUST register it in fixtures/index.ts and pass the updated file as fixtureUpdate in done()
    - For each missingLocator, emit a test.skip with the reason from the report
 2. Write or update the POM at pages/${report.feature}/<ClassName>.ts
    - Use ONLY locators from the ExplorationReport — never invent selectors

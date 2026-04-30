@@ -57,9 +57,9 @@ export const qaDoneTool: AgentTool = {
           },
         },
         affectedPaths: { type: 'string', description: 'Comma-separated test paths affected by the PR diff e.g. "tests/web/auth/,tests/web/checkout/"' },
-        fixtureUpdate: { type: 'string', description: 'Full updated content of fixtures/index.ts with the new POM(s) imported and registered. Omit only if the fixtures file already registers all POMs used by this spec.' },
+        fixtureUpdate: { type: 'string', description: 'Full updated content of fixtures/index.ts with the new POM(s) imported and registered. REQUIRED whenever poms contains any new POM — omit only if every POM in poms is already registered in the current fixtures/index.ts.' },
       },
-      required: ['feature', 'enrichedSpec', 'poms', 'affectedPaths'],
+      required: ['feature', 'enrichedSpec', 'poms', 'affectedPaths', 'fixtureUpdate'],
     },
   },
 };

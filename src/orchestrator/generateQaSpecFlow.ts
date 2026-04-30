@@ -48,6 +48,8 @@ export async function generateQaSpecFlow(task: QATask): Promise<void> {
       `feat(fixtures): register ${feature} POM for #${task.taskId} [klikagent]`,
     );
     log('INFO', `[generateQaSpecFlow] Committed fixtures/index.ts`);
+  } else if (poms.length > 0) {
+    log('WARN', `[generateQaSpecFlow] ${poms.length} POM(s) committed but fixtureUpdate was not provided — fixtures/index.ts may be incomplete`);
   }
 
   // Open draft PR in output repo
