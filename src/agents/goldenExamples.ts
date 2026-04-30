@@ -169,18 +169,47 @@ export class AuthPage {
 }
 `,
   fixturesUpdate: `import { AuthPage } from '../pages/auth/AuthPage';
-import { test as base } from '@playwright/test';
+import { test as base, Page } from '@playwright/test';
 
 // POMs are added here as KlikAgent generates and reviews them.
 // After each PR is merged, import the new POM and register it below.
 
 type Fixtures = {
+  // Auth — use for login-page tests (form validation, error states, etc.)
   authPage: AuthPage;
+
+  // Persona fixtures — provide a pre-authenticated Page via storageState.
+  // global-setup.ts logs in once per persona and saves .playwright-auth/{persona}.json.
+  // Use in feature tests: test('...', async ({ asPatient }) => { await asPatient.goto('/dashboard'); ... })
+  asPatient: Page;
+  asDoctor: Page;
+  asAdmin: Page;
 };
 
 export const test = base.extend<Fixtures>({
   authPage: async ({ page }, use) => {
     await use(new AuthPage(page));
+  },
+
+  asPatient: async ({ browser }, use) => {
+    const ctx = await browser.newContext({ storageState: '.playwright-auth/patient.json' });
+    const page = await ctx.newPage();
+    await use(page);
+    await ctx.close();
+  },
+
+  asDoctor: async ({ browser }, use) => {
+    const ctx = await browser.newContext({ storageState: '.playwright-auth/doctor.json' });
+    const page = await ctx.newPage();
+    await use(page);
+    await ctx.close();
+  },
+
+  asAdmin: async ({ browser }, use) => {
+    const ctx = await browser.newContext({ storageState: '.playwright-auth/admin.json' });
+    const page = await ctx.newPage();
+    await use(page);
+    await ctx.close();
   },
 });
 
@@ -188,65 +217,58 @@ export { expect } from '@playwright/test';
 `,
 };
 
-// ─── Example 2: Departments — Admin CRUD with beforeEach login ──────────────
+// ─── Example 2: Departments — Admin CRUD with persona fixture ───────────────
 // Demonstrates:
-//   - beforeEach for shared auth setup (auth fixture pattern)
+//   - asAdmin fixture (pre-authenticated via storageState, NO beforeEach)
 //   - Role-based test structure (admin-only feature)
 //   - CRUD flow: create → verify → update → delete
 //   - Dynamic locator with parameterized POM method
 //   - URL assertion after navigation
 //   - @regression tag for detailed edge-case coverage
+//   - POM constructed inline from persona page (not registered as fixture)
 
 export const DEPARTMENTS_ADMIN_EXAMPLE = {
   label: 'Example 2 — Departments: Admin CRUD operations',
   specPath: 'tests/web/departments/41-department-crud.spec.ts',
   spec: `import { test, expect } from '../../../fixtures';
-import { personas } from '../../../config/personas';
 import { DepartmentsPage } from '../../pages/departments/DepartmentsPage';
 
 test.describe('Departments | Admin CRUD', { tag: ['@departments', '@regression'] }, () => {
-  test.beforeEach(async ({ page }) => {
-    const authPage = new (await import('../../pages/auth/AuthPage')).AuthPage(page);
-    await authPage.gotoLogin();
-    await authPage.login(personas.admin.email, personas.admin.password);
-    await authPage.expectLoginSuccess(/\\/dashboard/);
-  });
-
-  test('admin sees departments list', async ({ page }) => {
-    const deptPage = new DepartmentsPage(page);
-    await deptPage.gotoDepartments();
+  test('admin sees departments list', async ({ asAdmin }) => {
+    await asAdmin.goto('/departments');
+    const deptPage = new DepartmentsPage(asAdmin);
     await deptPage.expectDepartmentsTableVisible();
   });
 
-  test('admin creates a new department', async ({ page }) => {
-    const deptPage = new DepartmentsPage(page);
-    await deptPage.gotoDepartments();
+  test('admin creates a new department', async ({ asAdmin }) => {
+    await asAdmin.goto('/departments');
+    const deptPage = new DepartmentsPage(asAdmin);
     await deptPage.clickAddDepartment();
     await deptPage.fillDepartmentForm('Cardiology', 'Heart and vascular care');
     await deptPage.submitDepartmentForm();
     await deptPage.expectDepartmentInList('Cardiology');
   });
 
-  test('admin edits an existing department', async ({ page }) => {
-    const deptPage = new DepartmentsPage(page);
-    await deptPage.gotoDepartments();
+  test('admin edits an existing department', async ({ asAdmin }) => {
+    await asAdmin.goto('/departments');
+    const deptPage = new DepartmentsPage(asAdmin);
     await deptPage.clickEditDepartment('Cardiology');
     await deptPage.fillDepartmentForm('Cardiology', 'Updated description');
     await deptPage.submitDepartmentForm();
     await deptPage.expectDepartmentDescription('Cardiology', 'Updated description');
   });
 
-  test('admin deletes a department', async ({ page }) => {
-    const deptPage = new DepartmentsPage(page);
-    await deptPage.gotoDepartments();
+  test('admin deletes a department', async ({ asAdmin }) => {
+    await asAdmin.goto('/departments');
+    const deptPage = new DepartmentsPage(asAdmin);
     await deptPage.clickDeleteDepartment('Cardiology');
     await deptPage.confirmDelete();
     await deptPage.expectDepartmentNotInList('Cardiology');
   });
 
-  test('cannot create department with duplicate name', async ({ page }) => {
-    const deptPage = new DepartmentsPage(page);
-    await deptPage.gotoDepartments();
+  test('cannot create department with duplicate name', async ({ asAdmin }) => {
+    await asAdmin.goto('/departments');
+    const deptPage = new DepartmentsPage(asAdmin);
     await deptPage.clickAddDepartment();
     await deptPage.fillDepartmentForm('Cardiology', 'Duplicate');
     await deptPage.submitDepartmentForm();
@@ -337,55 +359,30 @@ export class DepartmentsPage {
   }
 }
 `,
-  fixturesUpdate: `import { AuthPage } from '../pages/auth/AuthPage';
-import { DepartmentsPage } from '../pages/departments/DepartmentsPage';
-import { test as base } from '@playwright/test';
-
-type Fixtures = {
-  authPage: AuthPage;
-  departmentsPage: DepartmentsPage;
-};
-
-export const test = base.extend<Fixtures>({
-  authPage: async ({ page }, use) => {
-    await use(new AuthPage(page));
-  },
-  departmentsPage: async ({ page }, use) => {
-    await use(new DepartmentsPage(page));
-  },
-});
-
-export { expect } from '@playwright/test';
-`,
+  fixturesUpdate: undefined,
 };
 
 // ─── Example 3: Appointments — Patient booking flow ─────────────────────────
 // Demonstrates:
+//   - asPatient fixture (pre-authenticated via storageState, NO beforeEach)
 //   - Multi-step user flow across pages
 //   - Selecting from dropdowns (selectOption)
 //   - Waiting for async content (waitForLoadState, networkidle)
 //   - Parameterized POM methods for dynamic data
 //   - Combining multiple assertions per test
 //   - @smoke tag for critical happy path
+//   - POM constructed inline from persona page (not registered as fixture)
 
 export const APPOINTMENTS_BOOKING_EXAMPLE = {
   label: 'Example 3 — Appointments: Patient booking flow',
   specPath: 'tests/web/appointments/55-booking-flow.spec.ts',
   spec: `import { test, expect } from '../../../fixtures';
-import { personas } from '../../../config/personas';
 import { AppointmentsPage } from '../../pages/appointments/AppointmentsPage';
 
 test.describe('Appointments | Patient Booking', { tag: ['@appointments', '@smoke'] }, () => {
-  test.beforeEach(async ({ page }) => {
-    const authPage = new (await import('../../pages/auth/AuthPage')).AuthPage(page);
-    await authPage.gotoLogin();
-    await authPage.login(personas.patient.email, personas.patient.password);
-    await authPage.expectLoginSuccess(/\\/dashboard/);
-  });
-
-  test('patient books an appointment successfully', async ({ page }) => {
-    const appointments = new AppointmentsPage(page);
-    await appointments.gotoAppointments();
+  test('patient books an appointment successfully', async ({ asPatient }) => {
+    await asPatient.goto('/appointments');
+    const appointments = new AppointmentsPage(asPatient);
     await appointments.clickBookAppointment();
     await appointments.selectDoctor('Dr. Smith');
     await appointments.selectDate('2025-06-15');
@@ -394,22 +391,22 @@ test.describe('Appointments | Patient Booking', { tag: ['@appointments', '@smoke
     await appointments.expectBookingConfirmation('Dr. Smith', '09:00');
   });
 
-  test('patient sees their upcoming appointments', async ({ page }) => {
-    const appointments = new AppointmentsPage(page);
-    await appointments.gotoAppointments();
+  test('patient sees their upcoming appointments', async ({ asPatient }) => {
+    await asPatient.goto('/appointments');
+    const appointments = new AppointmentsPage(asPatient);
     await appointments.expectUpcomingAppointmentsVisible();
   });
 
-  test('patient cancels an appointment', async ({ page }) => {
-    const appointments = new AppointmentsPage(page);
-    await appointments.gotoAppointments();
+  test('patient cancels an appointment', async ({ asPatient }) => {
+    await asPatient.goto('/appointments');
+    const appointments = new AppointmentsPage(asPatient);
     await appointments.cancelAppointment('Dr. Smith', '09:00');
     await appointments.expectAppointmentStatus('Dr. Smith', 'Cancelled');
   });
 
-  test('cannot book without selecting a time slot', async ({ page }) => {
-    const appointments = new AppointmentsPage(page);
-    await appointments.gotoAppointments();
+  test('cannot book without selecting a time slot', async ({ asPatient }) => {
+    await asPatient.goto('/appointments');
+    const appointments = new AppointmentsPage(asPatient);
     await appointments.clickBookAppointment();
     await appointments.selectDoctor('Dr. Smith');
     await appointments.selectDate('2025-06-15');
@@ -507,26 +504,7 @@ export class AppointmentsPage {
   }
 }
 `,
-  fixturesUpdate: `import { AuthPage } from '../pages/auth/AuthPage';
-import { AppointmentsPage } from '../pages/appointments/AppointmentsPage';
-import { test as base } from '@playwright/test';
-
-type Fixtures = {
-  authPage: AuthPage;
-  appointmentsPage: AppointmentsPage;
-};
-
-export const test = base.extend<Fixtures>({
-  authPage: async ({ page }, use) => {
-    await use(new AuthPage(page));
-  },
-  appointmentsPage: async ({ page }, use) => {
-    await use(new AppointmentsPage(page));
-  },
-});
-
-export { expect } from '@playwright/test';
-`,
+  fixturesUpdate: undefined,
 };
 
 // ─── Example 4: Access control — role-based routing ─────────────────────────
@@ -535,50 +513,35 @@ export { expect } from '@playwright/test';
 //   - URL-based assertions for redirect/403 outcomes
 //   - Compact test structure for access-denied scenarios
 //   - Multiple roles in one describe block
+//   - asDoctor/asPatient/asAdmin fixtures for pre-authenticated access
+//   - No POM needed — reusing existing AuthPage pattern for navigation only
 
 export const ACCESS_CONTROL_EXAMPLE = {
   label: 'Example 4 — Access control: Role-based route restrictions',
   specPath: 'tests/web/departments/60-access-control.spec.ts',
   spec: `import { test, expect } from '../../../fixtures';
-import { personas } from '../../../config/personas';
-import { AuthPage } from '../../pages/auth/AuthPage';
 
 test.describe('Departments | Access Control', { tag: ['@departments', '@regression'] }, () => {
-  test('doctor cannot access departments page', async ({ page }) => {
-    const authPage = new AuthPage(page);
-    await authPage.gotoLogin();
-    await authPage.login(personas.doctor.email, personas.doctor.password);
-    await authPage.expectLoginSuccess(/\\/dashboard/);
-
-    await page.goto('/departments');
-    await expect(page).toHaveURL(/login|dashboard|403/);
+  test('doctor cannot access departments page', async ({ asDoctor }) => {
+    await asDoctor.goto('/departments');
+    await expect(asDoctor).toHaveURL(/login|dashboard|403/);
   });
 
-  test('patient cannot access departments page', async ({ page }) => {
-    const authPage = new AuthPage(page);
-    await authPage.gotoLogin();
-    await authPage.login(personas.patient.email, personas.patient.password);
-    await authPage.expectLoginSuccess(/\\/dashboard/);
-
-    await page.goto('/departments');
-    await expect(page).toHaveURL(/login|dashboard|403/);
+  test('patient cannot access departments page', async ({ asPatient }) => {
+    await asPatient.goto('/departments');
+    await expect(asPatient).toHaveURL(/login|dashboard|403/);
   });
 
-  test('admin can access departments page', async ({ page }) => {
-    const authPage = new AuthPage(page);
-    await authPage.gotoLogin();
-    await authPage.login(personas.admin.email, personas.admin.password);
-    await authPage.expectLoginSuccess(/\\/dashboard/);
-
-    await page.goto('/departments');
-    await expect(page).toHaveURL(/\\/departments/);
-    await expect(page.getByRole('table')).toBeVisible();
+  test('admin can access departments page', async ({ asAdmin }) => {
+    await asAdmin.goto('/departments');
+    await expect(asAdmin).toHaveURL(/\\/departments/);
+    await expect(asAdmin.getByRole('table')).toBeVisible();
   });
 });
 `,
   pomPath: 'pages/auth/AuthPage.ts',
-  pom: `// AuthPage already exists — no POM changes needed for this example.
-// This demonstrates that not every spec requires a new POM.
+  pom: `// No POM changes needed — this example uses persona fixtures directly.
+// Demonstrates that not every spec requires a new POM.
 // Reuse existing POMs when possible.
 `,
   fixturesUpdate: undefined,
