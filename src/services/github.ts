@@ -1,3 +1,4 @@
+import { createAppAuth } from '@octokit/auth-app';
 import { CIResult, PR, PRComment } from '../types';
 import { log } from '../utils/logger';
 
@@ -15,17 +16,27 @@ export function mainRepo(): string {
   return r;
 }
 
-function token(): string {
-  const t = process.env.GITHUB_TOKEN;
-  if (!t) throw new Error('GITHUB_TOKEN env var is not set');
-  return t;
+async function token(): Promise<string> {
+  const appId = process.env.GH_APP_ID;
+  const privateKey = process.env.GH_PRIVATE_KEY;
+  const installationId = process.env.GH_INSTALLATION_ID;
+  if (!appId || !privateKey || !installationId) {
+    throw new Error('GH_APP_ID, GH_PRIVATE_KEY, and GH_INSTALLATION_ID env vars are required');
+  }
+  const auth = createAppAuth({
+    appId,
+    privateKey: privateKey.replace(/\\n/g, '\n'),
+    installationId: Number(installationId),
+  });
+  const { token } = await auth({ type: 'installation' });
+  return token;
 }
 
 export async function ghRequest(path: string, method = 'GET', body?: unknown): Promise<Response> {
   const res = await fetch(`${GITHUB_API}${path}`, {
     method,
     headers: {
-      Authorization: `Bearer ${token()}`,
+      Authorization: `Bearer ${await token()}`,
       Accept: 'application/vnd.github+json',
       'X-GitHub-Api-Version': '2022-11-28',
       ...(body ? { 'Content-Type': 'application/json' } : {}),
