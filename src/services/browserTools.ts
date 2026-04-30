@@ -192,6 +192,19 @@ async function handleGenerateLocator(args: Record<string, unknown>): Promise<str
       log('WARN', `[BrowserTools] generate-locator returned unexpected output: ${result.slice(0, 100)}`);
       return JSON.stringify({ error: 'GENERATE_LOCATOR_FAILED', ref, message: result.trim() });
     }
+    // Reject CSS class/id selectors — they are brittle Tailwind/utility fallbacks with no semantic meaning.
+    // The agent should target a child element that has an accessible role, text, or test ID instead.
+    const isCssFallback = /^locator\(['"`][.#]/.test(result.trim());
+    if (isCssFallback) {
+      log('WARN', `[BrowserTools] generate-locator returned a CSS class selector for ref=${ref}: ${result.trim()} — rejecting`);
+      return JSON.stringify({
+        error: 'CSS_SELECTOR_REJECTED',
+        ref,
+        message: `No stable locator available for this element (got CSS fallback: ${result.trim()}). ` +
+          `This element has no accessible role, name, or test ID. ` +
+          `Use a child element with a proper role or text instead.`,
+      });
+    }
     return result.trim();
   } catch (err) {
     return JSON.stringify({ error: 'BROWSER_ERROR', message: String(err) });
@@ -332,7 +345,9 @@ export function buildBrowserTools(): AgentTool[] {
         description:
           'Generate the Playwright locator expression for an element ref from the current snapshot. ' +
           'Use this for POM properties you observe but do not directly interact with (so no "generatedCode" is produced for them). ' +
-          'Returns a string like: getByRole(\'button\', { name: \'Submit\' }) or getByTestId(\'email-input\').',
+          'Returns a string like: getByRole(\'button\', { name: \'Submit\' }) or getByTestId(\'email-input\'). ' +
+          'If the element has no accessible role, name, or test ID, returns a CSS_SELECTOR_REJECTED error — ' +
+          'in that case, target a child element that has a proper role or text instead.',
         parameters: {
           type: 'object',
           properties: {
