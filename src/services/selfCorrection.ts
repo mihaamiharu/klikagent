@@ -72,6 +72,17 @@ function checkSpecConventions(specContent: string, personaMap: PersonaMap): stri
     );
   }
 
+  // Feature specs must not use beforeEach to log in — use persona fixtures instead.
+  if (/beforeEach[\s\S]{0,200}(gotoLogin|authPage\.login)/.test(specContent)) {
+    violations.push(
+      'Spec uses beforeEach to log in (authPage.gotoLogin / authPage.login). ' +
+      'Feature tests must use persona fixtures instead: receive `asPatient`, `asDoctor`, or `asAdmin` ' +
+      'as a test parameter — these provide a pre-authenticated Page via storageState. ' +
+      'Remove the beforeEach block and construct the POM inline: ' +
+      '`test("...", async ({ asPatient }) => { await asPatient.goto("/dashboard"); const pom = new MyPage(asPatient); ... })`.'
+    );
+  }
+
   // Only flag hardcoded emails that match a real persona credential — not deliberate invalid-email literals
   const knownEmails = new Set(Object.values(personaMap).map((p) => p.email));
   const loginEmailPattern = /\.\s*login\s*\(\s*['"]([^'"]*@[^'"]*)['"]/g;

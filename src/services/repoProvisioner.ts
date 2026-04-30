@@ -41,12 +41,55 @@ function seedTestPatternsMd(): string {
   return `# Test Patterns\n\n## General rules\n- Use Page Object Models for all page interactions\n- Use \`getByTestId\` when data-testid attributes are available\n- Prefer \`getByRole\` over CSS selectors\n- Always await assertions — never use synchronous expect\n\n## Tags\n- Add feature tag and test type to every test: \`{ tag: ['@feature', '@smoke'] }\`\n- Describe block: \`test.describe('Feature | Scenario', { tag: '@feature' })\`\n\n## POM rules\n- One POM per feature in pages/{feature}/{ClassName}Page.ts\n- Expose locators as properties, actions as methods\n- Use POM methods in specs — never re-select elements directly\n`;
 }
 
-function seedFixturesTs(features: string[]): string {
-  const imports = features.map((f) => {
-    const cls = f.charAt(0).toUpperCase() + f.slice(1);
-    return `// import { ${cls}Page } from '../pages/${f}/${cls}Page';`;
-  }).join('\n');
-  return `import { test as base } from '@playwright/test';\n\n${imports}\n\n// Register your Page Object Models here as fixture parameters.\n// Example:\n// type Fixtures = { authPage: AuthPage };\n// export const test = base.extend<Fixtures>({\n//   authPage: async ({ page }, use) => { await use(new AuthPage(page)); },\n// });\n\nexport const test = base;\nexport { expect } from '@playwright/test';\n`;
+function seedFixturesTs(_features: string[]): string {
+  return [
+    `import { test as base, Page } from '@playwright/test';`,
+    `import { AuthPage } from '../pages/auth/AuthPage';`,
+    ``,
+    `// Register your Page Object Models here as fixture parameters.`,
+    `// After each PR is merged, import the new POM and register it below.`,
+    ``,
+    `type Fixtures = {`,
+    `  // Auth — use for login-page tests (form validation, error states, etc.)`,
+    `  authPage: AuthPage;`,
+    ``,
+    `  // Persona fixtures — provide a pre-authenticated Page via storageState.`,
+    `  // global-setup.ts logs in once per persona and saves .playwright-auth/{persona}.json.`,
+    `  // Use in feature tests: test('...', async ({ asPatient }) => { await asPatient.goto('/dashboard'); ... })`,
+    `  asPatient: Page;`,
+    `  asDoctor: Page;`,
+    `  asAdmin: Page;`,
+    `};`,
+    ``,
+    `export const test = base.extend<Fixtures>({`,
+    `  authPage: async ({ page }, use) => {`,
+    `    await use(new AuthPage(page));`,
+    `  },`,
+    ``,
+    `  asPatient: async ({ browser }, use) => {`,
+    `    const ctx = await browser.newContext({ storageState: '.playwright-auth/patient.json' });`,
+    `    const page = await ctx.newPage();`,
+    `    await use(page);`,
+    `    await ctx.close();`,
+    `  },`,
+    ``,
+    `  asDoctor: async ({ browser }, use) => {`,
+    `    const ctx = await browser.newContext({ storageState: '.playwright-auth/doctor.json' });`,
+    `    const page = await ctx.newPage();`,
+    `    await use(page);`,
+    `    await ctx.close();`,
+    `  },`,
+    ``,
+    `  asAdmin: async ({ browser }, use) => {`,
+    `    const ctx = await browser.newContext({ storageState: '.playwright-auth/admin.json' });`,
+    `    const page = await ctx.newPage();`,
+    `    await use(page);`,
+    `    await ctx.close();`,
+    `  },`,
+    `});`,
+    ``,
+    `export { expect } from '@playwright/test';`,
+  ].join('\n') + '\n';
 }
 
 function seedHelpersTs(): string {
@@ -68,8 +111,60 @@ function seedTsConfig(): string {
   }, null, 2) + '\n';
 }
 
+function seedGlobalSetupTs(): string {
+  return [
+    `import { chromium, FullConfig } from '@playwright/test';`,
+    `import { personas } from './config/personas';`,
+    `import fs from 'fs';`,
+    `import path from 'path';`,
+    ``,
+    `/**`,
+    ` * Global setup — runs once before the entire test suite.`,
+    ` * Logs in as each persona and saves storageState to .playwright-auth/{persona}.json.`,
+    ` * Tests load the saved state via asPatient / asDoctor / asAdmin fixtures — no login boilerplate needed.`,
+    ` */`,
+    `export default async function globalSetup(config: FullConfig) {`,
+    `  const baseURL = config.projects[0]?.use?.baseURL ?? 'http://localhost:3000';`,
+    `  const authDir = path.join(process.cwd(), '.playwright-auth');`,
+    `  fs.mkdirSync(authDir, { recursive: true });`,
+    ``,
+    `  const browser = await chromium.launch();`,
+    ``,
+    `  for (const [name, persona] of Object.entries(personas)) {`,
+    `    const context = await browser.newContext({ baseURL });`,
+    `    const page = await context.newPage();`,
+    `    await page.goto('/login');`,
+    `    await page.getByTestId('email-input').fill(persona.email);`,
+    `    await page.getByTestId('password-input').fill(persona.password);`,
+    `    await page.getByTestId('login-submit').click();`,
+    `    await page.waitForURL(/\\/dashboard/);`,
+    `    await context.storageState({ path: path.join(authDir, \`\${name}.json\`) });`,
+    `    await context.close();`,
+    `  }`,
+    ``,
+    `  await browser.close();`,
+    `}`,
+  ].join('\n') + '\n';
+}
+
 function seedPlaywrightConfig(qaEnvUrl: string): string {
-  return `import { defineConfig } from '@playwright/test';\n\nexport default defineConfig({\n  testDir: './tests',\n  timeout: 30000,\n  use: {\n    baseURL: '${qaEnvUrl}',\n    headless: true,\n    screenshot: 'only-on-failure',\n  },\n  reporter: [['html', { open: 'never' }]],\n});\n`;
+  return [
+    `import { defineConfig } from '@playwright/test';`,
+    ``,
+    `export default defineConfig({`,
+    `  testDir: './tests',`,
+    `  timeout: 30000,`,
+    `  globalSetup: require.resolve('./global-setup'),`,
+    `  use: {`,
+    `    baseURL: '${qaEnvUrl}',`,
+    `    headless: true,`,
+    `    screenshot: 'only-on-failure',`,
+    `    video: 'retain-on-failure',`,
+    `    trace: 'retain-on-failure',`,
+    `  },`,
+    `  reporter: [['html', { open: 'never' }], ['list']],`,
+    `});`,
+  ].join('\n') + '\n';
 }
 
 export async function provisionRepo(req: ProvisionRequest): Promise<ProvisionResult> {
@@ -86,11 +181,12 @@ export async function provisionRepo(req: ProvisionRequest): Promise<ProvisionRes
   const seedFiles: Array<{ path: string; content: string }> = [
     { path: 'config/routes.ts',          content: seedRoutesTs(req.features) },
     { path: 'config/keywords.json',      content: seedKeywordsJson(req.features) },
-    { path: 'config/personas.ts',       content: seedPersonasTs(req.personas) },
+    { path: 'config/personas.ts',        content: seedPersonasTs(req.personas) },
     { path: 'context/domain.md',         content: seedDomainMd(req.domainContext) },
     { path: 'context/personas.md',       content: seedPersonasMd() },
     { path: 'context/test-patterns.md',  content: seedTestPatternsMd() },
     { path: 'fixtures/index.ts',         content: seedFixturesTs(req.features) },
+    { path: 'global-setup.ts',           content: seedGlobalSetupTs() },
     { path: 'pages/.gitkeep',            content: '' },
     { path: 'tests/web/.gitkeep',        content: '' },
     { path: 'utils/helpers.ts',          content: seedHelpersTs() },

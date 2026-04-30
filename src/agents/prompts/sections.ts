@@ -158,14 +158,11 @@ export const SPEC_RULES = `## Spec writing rules
 - Prefer these assertion matchers: toBeVisible(), toHaveText(), toHaveValue(), toBeChecked(), toMatchAriaSnapshot() — they are auto-retrying and more resilient than count or attribute checks
 - NEVER hardcode real persona credentials (email/password) in specs. Import and use the personas object:
   import { personas } from '../../../config/personas';
-  await authPage.login(personas.patient.email, personas.patient.password);
 - For negative test cases that deliberately use invalid/non-existent credentials (e.g. testing an "invalid email" error state), use a descriptive literal string:
   await authPage.login('nonexistent@example.com', 'wrongpassword');
   NEVER invent a personas.X key that does not exist in the personas config — personas.nonExistent is INVALID and will cause a TypeScript error.
 - ALWAYS import test and expect from the project fixture layer — NEVER from @playwright/test directly:
   import { test, expect } from '../../../fixtures';  (adjust the relative depth for the spec file location)
-- Check the fixtures content: if the POM you need is already registered as a fixture (e.g. authPage, doctorsPage), use it as a fixture parameter in the test function — do NOT construct it with new PageClass(page) manually
-- Import POM classes only when you need to construct them manually (i.e. NOT registered as a fixture). NEVER import a POM that is both registered as a fixture AND constructed via new — pick one.
 - The pomPath field must be the repo-relative path matching the exported class name exactly e.g. "pages/auth/AuthPage.ts"
 - The affectedPaths field should list test folders impacted by this task
 - CRITICAL — POM method usage: You MUST use the POM for ALL interactions AND assertions on page elements. NEVER use \`page.locator\` or \`page.getBy*\` directly in the spec file. Define locators as POM properties and assertion helpers as POM methods, then call them from the spec. For example:
@@ -181,6 +178,24 @@ export const SPEC_RULES = `## Spec writing rules
   test.skip('Test title matching the missing scenario', async () => {
     // SKIPPED: "<name>" was not observed on <route> during exploration — <reason>
   });
+
+## Authentication in specs — NEVER use beforeEach login
+- Feature tests (anything outside the auth feature itself) MUST NOT use beforeEach to log in.
+- The fixtures file provides persona fixtures that deliver a pre-authenticated Page via storageState:
+    asPatient — authenticated as the patient persona
+    asDoctor  — authenticated as the doctor persona
+    asAdmin   — authenticated as the admin persona
+- Use the persona fixture that matches the ExplorationReport's authPersona field.
+- Pattern: receive the persona fixture, navigate to the starting route, construct the POM inline:
+    test('patient sees sidebar link', async ({ asPatient }) => {
+      await asPatient.goto('/dashboard');
+      const pom = new BookAppointmentPage(asPatient);
+      await pom.expectBookAppointmentSidebarLinkVisible();
+    });
+- NEVER add a beforeEach that calls authPage.gotoLogin() or authPage.login() for feature tests.
+- DO NOT register feature POMs as fixtures when using persona fixtures — construct them inline as shown above.
+- fixtureUpdate is NOT needed for feature specs using persona fixtures — omit it from done().
+- The authPage fixture is reserved for auth-specific tests only (login form, validation errors, logout).
 
 ## Tagging and reporting
 - Add Playwright tags to every test using the format: test(..., { tag: ['@tag1', '@tag2'] })

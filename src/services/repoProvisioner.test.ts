@@ -76,12 +76,13 @@ describe('provisionRepo', () => {
     expect(committedPaths).toContain('context/personas.md');
     expect(committedPaths).toContain('context/test-patterns.md');
     expect(committedPaths).toContain('fixtures/index.ts');
+    expect(committedPaths).toContain('global-setup.ts');
     expect(committedPaths).toContain('pages/.gitkeep');
     expect(committedPaths).toContain('tests/web/.gitkeep');
     expect(committedPaths).toContain('utils/helpers.ts');
     expect(committedPaths).toContain('tsconfig.json');
     expect(committedPaths).toContain('playwright.config.ts');
-    expect(mockCommitFile).toHaveBeenCalledTimes(12);
+    expect(mockCommitFile).toHaveBeenCalledTimes(13);
   });
 
   it('seeds routes.ts with the provided features', async () => {
