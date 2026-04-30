@@ -1,5 +1,6 @@
 import * as testRepo from './testRepo';
 import { WriterContext } from '../types';
+import { formatGoldenExamples } from '../agents/goldenExamples';
 
 // Feature-independent context — safe to prefetch while the explorer is still running.
 interface BaseContext {
@@ -7,6 +8,7 @@ interface BaseContext {
   personas: string;
   contextDocs: string;
   availablePoms: string[];
+  goldenExamples: string;
 }
 
 /**
@@ -26,7 +28,7 @@ export async function prefetchBaseContext(repoName: string): Promise<BaseContext
     .map(([file, content]) => `## ${file}\n${content}`)
     .join('\n\n');
 
-  return { fixtures, personas, contextDocs, availablePoms };
+  return { fixtures, personas, contextDocs, availablePoms, goldenExamples: formatGoldenExamples() };
 }
 
 /**
@@ -60,6 +62,8 @@ export async function resolveWriterContext(
 /** Formats a WriterContext into the user message section injected into the writer. */
 export function formatWriterContext(ctx: WriterContext): string {
   const parts: string[] = [];
+
+  parts.push(`## Golden Examples — Follow these patterns exactly\n\n${ctx.goldenExamples}`);
 
   parts.push(`## Project Context\n\n### fixtures/index.ts\n\`\`\`typescript\n${ctx.fixtures}\n\`\`\``);
   parts.push(`### config/personas.ts\n\`\`\`typescript\n${ctx.personas}\n\`\`\``);

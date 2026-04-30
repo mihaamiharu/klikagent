@@ -32,6 +32,7 @@ export interface WriterContext {
   availablePoms: string[];
   existingTests: Record<string, string>;
   existingPom: string | null;
+  goldenExamples: string;
 }
 
 // ─── QA Task (normalized payload from trigger services) ───────────────────────
