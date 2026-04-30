@@ -18,7 +18,6 @@
     ]
   },
   "dependencies": {
-    "@octokit/auth-app": "^8.2.0",
     "@playwright/cli": "^0.1.9",
     "dotenv": "^16.3.1",
     "express": "^4.18.2",

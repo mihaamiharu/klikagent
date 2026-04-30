@@ -1,4 +1,4 @@
-import { createAppAuth } from '@octokit/auth-app';
+import { createSign } from 'crypto';
 import { CIResult, PR, PRComment } from '../types';
 import { log } from '../utils/logger';
 
@@ -16,6 +16,22 @@ export function mainRepo(): string {
   return r;
 }
 
+function base64url(input: Buffer | string): string {
+  const buf = typeof input === 'string' ? Buffer.from(input) : input;
+  return buf.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+}
+
+function makeJwt(appId: string, privateKey: string): string {
+  const now = Math.floor(Date.now() / 1000);
+  const header = base64url(JSON.stringify({ alg: 'RS256', typ: 'JWT' }));
+  const payload = base64url(JSON.stringify({ iat: now - 60, exp: now + 600, iss: appId }));
+  const data = `${header}.${payload}`;
+  const sign = createSign('RSA-SHA256');
+  sign.update(data);
+  const sig = base64url(sign.sign(privateKey));
+  return `${data}.${sig}`;
+}
+
 async function token(): Promise<string> {
   const appId = process.env.GH_APP_ID;
   const privateKey = process.env.GH_PRIVATE_KEY;
@@ -23,13 +39,18 @@ async function token(): Promise<string> {
   if (!appId || !privateKey || !installationId) {
     throw new Error('GH_APP_ID, GH_PRIVATE_KEY, and GH_INSTALLATION_ID env vars are required');
   }
-  const auth = createAppAuth({
-    appId,
-    privateKey: privateKey.replace(/\\n/g, '\n'),
-    installationId: Number(installationId),
+  const jwt = makeJwt(appId, privateKey.replace(/\\n/g, '\n'));
+  const res = await fetch(`${GITHUB_API}/app/installations/${installationId}/access_tokens`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${jwt}`,
+      Accept: 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2022-11-28',
+    },
   });
-  const { token } = await auth({ type: 'installation' });
-  return token;
+  if (!res.ok) throw new Error(`GitHub App token fetch failed: ${res.status}`);
+  const data = await res.json() as { token: string };
+  return data.token;
 }
 
 export async function ghRequest(path: string, method = 'GET', body?: unknown): Promise<Response> {
