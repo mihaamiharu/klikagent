@@ -244,6 +244,14 @@ export const validateTypescriptHandler: ToolHandlers = {
         pattern: /import\s*{[^}]*}\s*from\s*['"]@playwright\/test['"]/,
         hint: 'Do not import from @playwright/test directly in spec files. Use the fixture layer: import { test, expect } from \'../../../fixtures\'',
       },
+      {
+        pattern: /test\s*\.\s*each\s*\(/,
+        hint: 'test.each() is a Jest pattern and does not exist in Playwright. Write individual test() calls or use a for...of loop to iterate over test data.',
+      },
+      {
+        pattern: /async\s*\(\s*\{\s*page\s*,/,
+        hint: 'Spec destructures bare `page` fixture. Feature tests must use persona fixtures: `asPatient`, `asDoctor`, or `asAdmin` — these provide a pre-authenticated Page via storageState.',
+      },
     ];
 
     for (const { pattern, hint } of allFilePatterns) {

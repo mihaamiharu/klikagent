@@ -87,6 +87,20 @@ function checkSpecConventions(specContent: string, personaMap: PersonaMap): stri
     );
   }
 
+  if (/test\s*\.\s*each\s*\(/.test(specContent)) {
+    violations.push(
+      'Spec uses `test.each()` which is a Jest pattern and does not exist in Playwright. ' +
+      'Write individual `test()` calls or use a `for...of` loop to iterate over test data.'
+    );
+  }
+
+  if (/async\s*\(\s*\{\s*page\s*,/.test(specContent)) {
+    violations.push(
+      'Spec destructures bare `page` fixture. Feature tests must use persona fixtures: ' +
+      '`asPatient`, `asDoctor`, or `asAdmin` — these provide a pre-authenticated Page via storageState.'
+    );
+  }
+
   const knownEmails = new Set(Object.values(personaMap).map((p) => p.email));
   const loginEmailPattern = /\.\s*login\s*\(\s*['"]([^'"]*@[^'"]*)['"]/g;
   let loginEmailMatch: RegExpExecArray | null;
