@@ -3,6 +3,7 @@ import { promisify } from 'util';
 import fs from 'fs/promises';
 import path from 'path';
 import { log } from '../utils/logger';
+import { token as getGitHubToken } from './github';
 
 const execFileAsync = promisify(execFile);
 
@@ -46,9 +47,17 @@ async function repoExists(repoName: string): Promise<boolean> {
 async function getCloneUrl(repoName: string): Promise<string> {
   const owner = process.env.GITHUB_OWNER;
   if (!owner) throw new Error('GITHUB_OWNER env var is not set');
-  const token = process.env.GITHUB_TOKEN ?? process.env.GH_APP_TOKEN;
-  if (token) {
-    return `https://x-access-token:${token}@github.com/${owner}/${repoName}.git`;
+  const pat = process.env.GITHUB_TOKEN ?? process.env.GH_APP_TOKEN;
+  if (pat) {
+    return `https://x-access-token:${pat}@github.com/${owner}/${repoName}.git`;
+  }
+  try {
+    const appToken = await getGitHubToken();
+    if (appToken) {
+      return `https://x-access-token:${appToken}@github.com/${owner}/${repoName}.git`;
+    }
+  } catch {
+    // GitHub App credentials not available — fall through to unauthenticated
   }
   return `https://github.com/${owner}/${repoName}.git`;
 }

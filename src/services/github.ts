@@ -32,7 +32,7 @@ function makeJwt(appId: string, privateKey: string): string {
   return `${data}.${sig}`;
 }
 
-async function token(): Promise<string> {
+export async function token(): Promise<string> {
   const appId = process.env.GH_APP_ID;
   const privateKey = process.env.GH_PRIVATE_KEY;
   const installationId = process.env.GH_INSTALLATION_ID;
