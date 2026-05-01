@@ -201,8 +201,8 @@ export const SPEC_RULES = `## Spec writing rules
       await pom.expectBookAppointmentSidebarLinkVisible();
     });
 - NEVER add a beforeEach that calls authPage.gotoLogin() or authPage.login() for feature tests.
-- DO NOT register feature POMs as fixtures when using persona fixtures — construct them inline as shown above.
-- Do NOT include fixtures/index.ts in files[] for feature specs using persona fixtures — construct POMs inline instead.
+- Feature POMs are NEVER registered in fixtures/index.ts — construct them inline as shown above.
+- NEVER create separate fixture files for feature POMs (e.g. fixtures/bookAppointmentPage.ts) — only fixtures/index.ts exists.
 - The authPage fixture is reserved for auth-specific tests only (login form, validation errors, logout).
 
 ## Tagging and reporting
@@ -220,18 +220,18 @@ export const POM_RULES = `## POM rules
 - Use relative imports only
 - If the feature requires multiple POMs, put all of them in the poms array in done()
 
-## Fixture registration
-After writing a new POM, you MUST register it in fixtures/index.ts and include the updated file in your files[] with role="fixture". Steps:
-1. Use the fixtures content from your context
-2. Add an import for each new POM class at the top: import { ClassName } from '../pages/{feature}/ClassName';
-3. Extend the base fixture with the new POM:
-   const test = base.extend<{ fixtureName: ClassName }>({
-     fixtureName: async ({ page }, use) => { await use(new ClassName(page)); },
-   });
-4. Ensure export { expect } from '@playwright/test' is NOT duplicated — if expect is already imported at the top, remove the re-export or vice versa. Only one source of expect.
-5. Include the full updated fixtures/index.ts as an entry in files[]: { path: "fixtures/index.ts", content: "...", role: "fixture" }
-6. Update your spec to use the fixture parameter directly: test('...', async ({ fixtureName }) => { ... })
-- Only omit the fixture entry if the POM was already registered (visible in the fixtures content)`;
+## Feature POMs are NOT registered as fixtures
+- When using persona fixtures (asPatient, asDoctor, asAdmin), construct the POM inline in each test
+- Do NOT register feature POMs in fixtures/index.ts
+- Do NOT create separate fixture files for feature POMs (e.g. fixtures/bookAppointmentPage.ts)
+- The only fixture files that exist are fixtures/index.ts (which registers authPage + persona fixtures)
+- Pattern:
+    test('patient sees sidebar link', async ({ asPatient }) => {
+      await asPatient.goto('/dashboard');
+      const pom = new BookAppointmentPage(asPatient);
+      await pom.expectSidebarLinkVisible();
+    });
+- The authPage fixture is reserved for auth-specific tests only`;
 
 export const VALIDATION_RULES = `## Playwright API rules (violations will be caught by validate_typescript)
 - NEVER use expect(...).or() - this method does not exist on expect. Use locator.or(): locator1.or(locator2), or use a regex: expect(el).toContainText(/value1|value2/)

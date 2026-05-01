@@ -175,6 +175,53 @@ function checkPomConventions(pomFiles: FileEntry[], personaMap: PersonaMap): str
   return violations;
 }
 
+/** Structural checks that apply to the entire file set, not just individual files. */
+function checkStructuralIssues(files: FileEntry[]): string[] {
+  const violations: string[] = [];
+
+  // Check for unauthorized fixture files — only fixtures/index.ts is allowed
+  const fixtureFiles = files.filter((f) => f.path.startsWith('fixtures/') && f.path !== 'fixtures/index.ts');
+  for (const f of fixtureFiles) {
+    violations.push(
+      `Unauthorized fixture file: "${f.path}". Feature POMs must NOT be registered as fixtures. ` +
+      'Remove this file and construct the POM inline in the spec using persona fixtures (asPatient, asDoctor, asAdmin).'
+    );
+  }
+
+  // Check for Jest patterns in any file
+  for (const f of files.filter((f) => f.path.endsWith('.spec.ts'))) {
+    if (/describe\s*\.\s*each\s*\(/.test(f.content)) {
+      violations.push(
+        `${f.path}: Uses \`describe.each()\` which is a Jest pattern and does not exist in Playwright. ` +
+        'Write individual test.describe() blocks instead.'
+      );
+    }
+  }
+
+  // Check that spec import paths for POMs are correct (should be 3 levels up from tests/web/feature/)
+  for (const f of files.filter((f) => f.role === 'spec')) {
+    const pomImportMatch = f.content.match(/import\s*{[^}]*Page[^}]*}\s*from\s*['"]([^'"]+)['"]/g);
+    if (pomImportMatch) {
+      for (const imp of pomImportMatch) {
+        const pathMatch = imp.match(/from\s*['"]([^'"]+)['"]/);
+        if (pathMatch) {
+          const importPath = pathMatch[1];
+          // Specs in tests/web/feature/ need 3 levels up to reach pages/
+          if (!importPath.startsWith('../../../') && importPath.includes('pages/')) {
+            violations.push(
+              `${f.path}: POM import path "${importPath}" is incorrect. ` +
+              `Specs in tests/web/feature/ must use '../../../pages/...' (3 levels up). ` +
+              `Fix to: import { ... } from '../../../pages/feature/ClassName';`
+            );
+          }
+        }
+      }
+    }
+  }
+
+  return violations;
+}
+
 function formatFilesForPrompt(files: FileEntry[]): string {
   return files.map((f) => `### ${f.path} (role: ${f.role})\n\`\`\`typescript\n${f.content}\n\`\`\``).join('\n\n');
 }
@@ -333,7 +380,8 @@ export async function runWithSelfCorrection(
     const pomFiles = getPomFiles(files);
     const specViolations = specFile ? checkSpecConventions(specFile.content, personaMap) : [];
     const pomViolations = checkPomConventions(pomFiles, personaMap);
-    const conventionErrors = [...specViolations, ...pomViolations];
+    const structuralIssues = checkStructuralIssues(files);
+    const conventionErrors = [...specViolations, ...pomViolations, ...structuralIssues];
 
     if (astErrors.length === 0 && conventionErrors.length === 0) {
       log('INFO', `[selfCorrection] Phase 1 valid${attempt > 1 ? ` after ${attempt - 1} correction(s)` : ''}`);
@@ -355,7 +403,11 @@ export async function runWithSelfCorrection(
     }
 
     const { args, tokenUsage: fixUsage } = await runAgent(
-      'Fix the convention and/or AST errors in the files below. Output only the changed files.',
+      `Fix the errors listed below. Rules:
+- Fix ONLY what is listed — do not change any other logic
+- For convention errors: apply the suggested fix pattern
+- For AST errors: fix the TypeScript syntax/type issue
+- Output ONLY the changed files in your done() call`,
       `ERRORS:\n${combinedErrors}\n\n${formatFilesForPrompt(files)}`,
       fixFilesTools,
       validateTypescriptHandler,
@@ -391,6 +443,7 @@ export async function runWithSelfCorrection(
   const remainingConventions = [
     ...(specFile ? checkSpecConventions(specFile.content, personaMap) : []),
     ...checkPomConventions(pomFiles, personaMap),
+    ...checkStructuralIssues(files),
   ];
 
   if (remainingConventions.length === 0 && astErrors.length === 0) {
@@ -459,6 +512,7 @@ Output only the changed files.`,
   const finalConventions = [
     ...(finalSpec ? checkSpecConventions(finalSpec.content, personaMap) : []),
     ...checkPomConventions(finalPoms, personaMap),
+    ...checkStructuralIssues(files),
   ];
   const errorSummary = [
     ...finalConventions.map((m) => `CONVENTION: ${m}`),
