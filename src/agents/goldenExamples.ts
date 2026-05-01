@@ -33,7 +33,7 @@ Construct POMs inline from the persona page. NEVER use beforeEach to log in.
 
 \`\`\`typescript
 import { test, expect } from '../../../fixtures';
-import { DepartmentsPage } from '../../pages/departments/DepartmentsPage';
+import { DepartmentsPage } from '../../../pages/departments/DepartmentsPage';
 
 test.describe('Departments | Admin CRUD', { tag: ['@departments', '@regression'] }, () => {
   test('admin sees departments list', async ({ asAdmin }) => {
