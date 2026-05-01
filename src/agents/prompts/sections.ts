@@ -237,6 +237,8 @@ export const VALIDATION_RULES = `## Playwright API rules (violations will be cau
 - NEVER use expect(...).or() - this method does not exist on expect. Use locator.or(): locator1.or(locator2), or use a regex: expect(el).toContainText(/value1|value2/)
 - NEVER chain .or() after expect(...).toContainText(...) or any other expect assertion
 - locator.or(other) works ONLY on Locator objects, not on expect results
+- NEVER use test.each() — this is a Jest pattern. Playwright does not support test.each(). Write individual test() calls or use a for...of loop
+- NEVER destructure bare \`page\` in feature tests — use persona fixtures: \`asPatient\`, \`asDoctor\`, or \`asAdmin\`
 
 ## CRITICAL: validate_typescript and done() protocol
 - Call validate_typescript(code, fileType: "pom") on EACH POM file separately
