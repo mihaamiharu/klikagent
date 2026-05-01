@@ -5,12 +5,14 @@ import { QATask } from '../types';
 
 jest.mock('../services/selfCorrection');
 jest.mock('../services/github');
+jest.mock('../services/localRepo');
 jest.mock('../utils/naming');
 jest.mock('../agents/tools/outputTools');
 jest.mock('../utils/logger', () => ({ log: jest.fn() }));
 
 import * as selfCorrection from '../services/selfCorrection';
 import * as github from '../services/github';
+import * as localRepo from '../services/localRepo';
 import * as naming from '../utils/naming';
 import * as outputTools from '../agents/tools/outputTools';
 
@@ -36,11 +38,14 @@ function setupDefaultMocks(): void {
   (github.createBranch as jest.Mock).mockResolvedValue(undefined);
   (naming.toBranchSlug as jest.Mock).mockReturnValue('qa/42-login-form-validation');
   (naming.toSpecFileName as jest.Mock).mockReturnValue('login-form-validation.spec.ts');
+  (localRepo.ensureRepo as jest.Mock).mockResolvedValue(undefined);
 
   (selfCorrection.runWithSelfCorrection as jest.Mock).mockResolvedValue({
     feature: 'auth',
-    specContent: 'test("login", async () => {});',
-    poms: [{ pomContent: 'export class AuthPage {}', pomPath: 'pages/auth/AuthPage.ts' }],
+    files: [
+      { path: 'tests/web/auth/login-form-validation.spec.ts', content: 'test("login", async () => {});', role: 'spec' },
+      { path: 'pages/auth/AuthPage.ts', content: 'export class AuthPage {}', role: 'pom' },
+    ],
     affectedPaths: 'tests/web/auth/',
     tokenUsage: { promptTokens: 1000, completionTokens: 500, totalTokens: 1500, costUSD: 0.01 },
     warned: false,
@@ -99,8 +104,10 @@ describe('generateQaSpecFlow — happy path', () => {
     // task.feature is a hint only — agent output is authoritative
     (selfCorrection.runWithSelfCorrection as jest.Mock).mockResolvedValue({
       feature: 'doctors',
-      specContent: 'test("doctors", async () => {});',
-      poms: [{ pomContent: 'export class DoctorsPage {}', pomPath: 'pages/doctors/DoctorsPage.ts' }],
+      files: [
+        { path: 'tests/web/doctors/doctor-reviews.spec.ts', content: 'test("doctors", async () => {});', role: 'spec' },
+        { path: 'pages/doctors/DoctorsPage.ts', content: 'export class DoctorsPage {}', role: 'pom' },
+      ],
       affectedPaths: 'tests/web/doctors/',
       tokenUsage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
       warned: false,
@@ -134,8 +141,10 @@ describe('generateQaSpecFlow — warned path', () => {
   beforeEach(() => {
     (selfCorrection.runWithSelfCorrection as jest.Mock).mockResolvedValue({
       feature: 'auth',
-      specContent: 'test("login", async () => {});',
-      poms: [{ pomContent: 'export class AuthPage {}', pomPath: 'pages/auth/AuthPage.ts' }],
+      files: [
+        { path: 'tests/web/auth/login-form-validation.spec.ts', content: 'test("login", async () => {});', role: 'spec' },
+        { path: 'pages/auth/AuthPage.ts', content: 'export class AuthPage {}', role: 'pom' },
+      ],
       affectedPaths: 'tests/web/auth/',
       tokenUsage: { promptTokens: 2000, completionTokens: 1000, totalTokens: 3000, costUSD: 0.02 },
       warned: true,
@@ -159,14 +168,15 @@ describe('generateQaSpecFlow — warned path', () => {
   });
 });
 
-describe('generateQaSpecFlow — POM handling', () => {
-  it('commits all POMs from the poms array', async () => {
+describe('generateQaSpecFlow — multi-file output', () => {
+  it('commits all files from the files array', async () => {
     (selfCorrection.runWithSelfCorrection as jest.Mock).mockResolvedValue({
       feature: 'auth',
-      specContent: 'test("login", async () => {});',
-      poms: [
-        { pomContent: 'export class AuthPage {}', pomPath: 'pages/auth/AuthPage.ts' },
-        { pomContent: 'export class LoginForm {}', pomPath: 'pages/auth/LoginForm.ts' },
+      files: [
+        { path: 'tests/web/auth/login-form-validation.spec.ts', content: 'test("login", async () => {});', role: 'spec' },
+        { path: 'pages/auth/AuthPage.ts', content: 'export class AuthPage {}', role: 'pom' },
+        { path: 'pages/auth/LoginForm.ts', content: 'export class LoginForm {}', role: 'pom' },
+        { path: 'fixtures/index.ts', content: 'export const test = base.extend({});', role: 'fixture' },
       ],
       affectedPaths: 'tests/web/auth/',
       tokenUsage: { promptTokens: 100, completionTokens: 50, totalTokens: 150, costUSD: 0.001 },
@@ -175,10 +185,11 @@ describe('generateQaSpecFlow — POM handling', () => {
 
     await generateQaSpecFlow(makeTask());
 
-    // spec + pom1 + pom2 = 3 commits
-    expect((github.commitFile as jest.Mock).mock.calls.length).toBe(3);
+    expect((github.commitFile as jest.Mock).mock.calls.length).toBe(4);
+    expect((github.commitFile as jest.Mock).mock.calls[0][2]).toBe('tests/web/auth/login-form-validation.spec.ts');
     expect((github.commitFile as jest.Mock).mock.calls[1][2]).toBe('pages/auth/AuthPage.ts');
     expect((github.commitFile as jest.Mock).mock.calls[2][2]).toBe('pages/auth/LoginForm.ts');
+    expect((github.commitFile as jest.Mock).mock.calls[3][2]).toBe('fixtures/index.ts');
   });
 });
 

@@ -171,7 +171,7 @@ export const SPEC_RULES = `## Spec writing rules
   NEVER invent a personas.X key that does not exist in the personas config — personas.nonExistent is INVALID and will cause a TypeScript error.
 - ALWAYS import test and expect from the project fixture layer — NEVER from @playwright/test directly:
   import { test, expect } from '../../../fixtures';  (adjust the relative depth for the spec file location)
-- The pomPath field must be the repo-relative path matching the exported class name exactly e.g. "pages/auth/AuthPage.ts"
+- The path field in files[] must be the repo-relative path matching the exported class name exactly e.g. "pages/auth/AuthPage.ts"
 - The affectedPaths field should list test folders impacted by this task
 - CRITICAL — POM method usage: You MUST use the POM for ALL interactions AND assertions on page elements. NEVER use \`page.locator\` or \`page.getBy*\` directly in the spec file. Define locators as POM properties and assertion helpers as POM methods, then call them from the spec. For example:
   - Use authPage.emailInput.fill(email) NOT page.getByTestId('email-input').fill(email)
@@ -202,7 +202,7 @@ export const SPEC_RULES = `## Spec writing rules
     });
 - NEVER add a beforeEach that calls authPage.gotoLogin() or authPage.login() for feature tests.
 - DO NOT register feature POMs as fixtures when using persona fixtures — construct them inline as shown above.
-- fixtureUpdate is NOT needed for feature specs using persona fixtures — omit it from done().
+- Do NOT include fixtures/index.ts in files[] for feature specs using persona fixtures — construct POMs inline instead.
 - The authPage fixture is reserved for auth-specific tests only (login form, validation errors, logout).
 
 ## Tagging and reporting
@@ -216,12 +216,12 @@ export const POM_RULES = `## POM rules
 - POM file goes in: pages/{feature}/{ClassName}.ts  where {feature} is given explicitly in your task
 - NEVER use "general" as a feature folder — it does not exist in this repo and will cause an import error
 - NEVER invent a feature folder name. Only use feature names present in the fixtures content or the available POMs list
-- Exported class name must match the pomPath filename exactly
+- Exported class name must match the path filename exactly
 - Use relative imports only
 - If the feature requires multiple POMs, put all of them in the poms array in done()
 
 ## Fixture registration
-After writing a new POM, you MUST register it in fixtures/index.ts and pass the updated file as fixtureUpdate in done(). Steps:
+After writing a new POM, you MUST register it in fixtures/index.ts and include the updated file in your files[] with role="fixture". Steps:
 1. Use the fixtures content from your context
 2. Add an import for each new POM class at the top: import { ClassName } from '../pages/{feature}/ClassName';
 3. Extend the base fixture with the new POM:
@@ -229,9 +229,9 @@ After writing a new POM, you MUST register it in fixtures/index.ts and pass the 
      fixtureName: async ({ page }, use) => { await use(new ClassName(page)); },
    });
 4. Ensure export { expect } from '@playwright/test' is NOT duplicated — if expect is already imported at the top, remove the re-export or vice versa. Only one source of expect.
-5. Pass the full updated fixtures/index.ts content as fixtureUpdate in done()
+5. Include the full updated fixtures/index.ts as an entry in files[]: { path: "fixtures/index.ts", content: "...", role: "fixture" }
 6. Update your spec to use the fixture parameter directly: test('...', async ({ fixtureName }) => { ... })
-- Only omit fixtureUpdate if the POM was already registered (visible in the fixtures content)`;
+- Only omit the fixture entry if the POM was already registered (visible in the fixtures content)`;
 
 export const VALIDATION_RULES = `## Playwright API rules (violations will be caught by validate_typescript)
 - NEVER use expect(...).or() - this method does not exist on expect. Use locator.or(): locator1.or(locator2), or use a regex: expect(el).toContainText(/value1|value2/)
@@ -244,22 +244,29 @@ export const VALIDATION_RULES = `## Playwright API rules (violations will be cau
 - If validation returns errors: fix them, then call validate_typescript again
 - If validation returns {"valid":true,"errors":[]}: call done() IMMEDIATELY on the next tool call — do NOT write more code or re-validate again
 - After validation passes, the ONLY acceptable next tool call is done()
-- In done(), pass all POMs in the poms array — each POM must include both pomContent and pomPath`;
+- In done(), pass all files in the files[] array — each entry must include path, content, and role`;
 
 export const WRITER_CODE_GEN_SEQUENCE = `## Required steps — code generation
-1. Read the Golden Patterns in your context and pick the matching pattern:
+1. Read the Golden Patterns and pre-fetched context — this is your PRIMARY source of truth.
+2. ONLY if you need to understand an existing utility, helper, or pattern NOT in the pre-fetched context:
+   a. Use search_codebase(query) to find relevant files (e.g., "custom assertion", "date formatting")
+   b. Use list_directory(path) to explore directory structure (e.g., "utils/", "fixtures/")
+   c. Use get_file(path) to read the full content of a relevant file
+   Do NOT search for things already in your context (fixtures, personas, existing POMs for this feature).
+   Each discovery query costs a tool call — be targeted. 1-2 discovery calls per task is normal; 5+ is excessive.
+3. Read the Golden Patterns and pick the matching pattern:
    - Auth tests (login form) → Pattern 1: use authPage fixture
    - Feature tests (any non-auth feature) → Patterns 2+5: use asPatient/asDoctor/asAdmin, construct POM inline, do NOT register in fixtures
    - Access control → Pattern 6: compact tests, no POM needed
-2. Apply Pattern 3: use personas.X.displayName in assertions — never hardcode display names
-3. Apply Pattern 4: add getter methods to POM for attribute access — never expose locators directly
-4. Apply Pattern 7: POM structure — readonly locators in constructor, async methods, explicit return types
-5. Read the ExplorationReport:
+4. Apply Pattern 3: use personas.X.displayName in assertions — never hardcode display names
+5. Apply Pattern 4: add getter methods to POM for attribute access — never expose locators directly
+6. Apply Pattern 7: POM structure — readonly locators in constructor, async methods, explicit return types
+7. Read the ExplorationReport:
    - locators (grouped by route) — these are the ONLY selectors you may use
    - flows — map each flow to a test case
    - missingLocators — emit test.skip for each one
    - notes — understand app behavior before writing
-6. Write enrichedSpec and poms using ONLY locators from the report
-7. Call validate_typescript(code, fileType: "pom") on EACH POM file separately
-8. Call validate_typescript(code, fileType: "spec") on the spec
-9. If valid: call done() immediately. If errors: fix and repeat from step 7.`;
+8. Write the spec and POMs using ONLY locators from the report
+9. Call validate_typescript(code, fileType: "pom") on EACH POM file separately
+10. Call validate_typescript(code, fileType: "spec") on the spec
+11. If valid: call done() immediately. If errors: fix and repeat from step 9.`;

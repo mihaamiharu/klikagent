@@ -1,17 +1,16 @@
-import { QATask, CiTestFailure } from '../types';
+import { QATask, CiTestFailure, FileEntry } from '../types';
 import { PersonaMap } from './personas';
 import { runQaAgent } from '../agents/qaAgent';
 import { runAgent, TokenUsage } from './ai';
 import { validateTypescriptHandler, validateTypescriptTool, PAGE_GETBY_IN_SPEC_PATTERN } from '../agents/tools/outputTools';
 import { qaTools, createQaHandlers, browserHandlers } from '../agents/tools';
 import { maxSelfCorrectionAttempts } from './testRepoClone';
+import { runTypecheck, runLint, ValidationError } from './codeValidation';
 import { log } from '../utils/logger';
 import { dashboardBus } from '../dashboard/eventBus';
 import { AgentTool } from '../types';
 import { getPersonas } from './personas';
-import { getCurrentSpec, getCurrentPOM, getSpecPath } from './testRepo';
-
-type Pom = { pomContent: string; pomPath: string };
+import { getCurrentSpecOnBranch, getCurrentPOMOnBranch, getSpecPathOnBranch } from './localRepo';
 
 function getForbiddenPersonaStrings(personaMap: PersonaMap): string[] {
   const forbidden = new Set<string>();
@@ -23,11 +22,18 @@ function getForbiddenPersonaStrings(personaMap: PersonaMap): string[] {
       }
     }
   }
-  // Also add role keys
   for (const role of Object.keys(personaMap)) {
     if (role.length > 2) forbidden.add(role);
   }
   return Array.from(forbidden);
+}
+
+function getSpecFile(files: FileEntry[]): FileEntry | undefined {
+  return files.find((f) => f.role === 'spec');
+}
+
+function getPomFiles(files: FileEntry[]): FileEntry[] {
+  return files.filter((f) => f.role === 'pom');
 }
 
 function checkSpecConventions(specContent: string, personaMap: PersonaMap): string[] {
@@ -42,7 +48,6 @@ function checkSpecConventions(specContent: string, personaMap: PersonaMap): stri
     );
   }
 
-  // Dynamic persona check
   for (const str of forbiddenStrings) {
     const escaped = str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const regex = new RegExp(`(?<!personas\\.)\\b${escaped}\\b`, 'i');
@@ -51,7 +56,7 @@ function checkSpecConventions(specContent: string, personaMap: PersonaMap): stri
         `Spec contains hardcoded persona data ("${str}"). ` +
         'Assertions and locators must be persona-agnostic or use dynamic data from the imported `personas` object.'
       );
-      break; // One violation is enough to trigger a fix
+      break;
     }
   }
 
@@ -72,7 +77,6 @@ function checkSpecConventions(specContent: string, personaMap: PersonaMap): stri
     );
   }
 
-  // Feature specs must not use beforeEach to log in — use persona fixtures instead.
   if (/beforeEach[\s\S]{0,200}(gotoLogin|authPage\.login)/.test(specContent)) {
     violations.push(
       'Spec uses beforeEach to log in (authPage.gotoLogin / authPage.login). ' +
@@ -83,7 +87,6 @@ function checkSpecConventions(specContent: string, personaMap: PersonaMap): stri
     );
   }
 
-  // Only flag hardcoded emails that match a real persona credential — not deliberate invalid-email literals
   const knownEmails = new Set(Object.values(personaMap).map((p) => p.email));
   const loginEmailPattern = /\.\s*login\s*\(\s*['"]([^'"]*@[^'"]*)['"]/g;
   let loginEmailMatch: RegExpExecArray | null;
@@ -101,8 +104,6 @@ function checkSpecConventions(specContent: string, personaMap: PersonaMap): stri
     }
   }
 
-  // Check for invented persona keys (personas.nonExistent) or invented properties (personas.patient.firstName)
-  // Use a Set to avoid duplicate violations for the same key/prop used multiple times
   const reportedPersonaViolations = new Set<string>();
   const personaAccessPattern = /personas\.(\w+)\.(\w+)/g;
   let personaAccessMatch: RegExpExecArray | null;
@@ -138,15 +139,15 @@ function checkSpecConventions(specContent: string, personaMap: PersonaMap): stri
   return violations;
 }
 
-function checkPomConventions(poms: Pom[], personaMap: PersonaMap): string[] {
+function checkPomConventions(pomFiles: FileEntry[], personaMap: PersonaMap): string[] {
   const violations: string[] = [];
   const forbiddenStrings = getForbiddenPersonaStrings(personaMap);
 
-  for (const { pomContent, pomPath } of poms) {
+  for (const { content, path: pomPath } of pomFiles) {
     for (const str of forbiddenStrings) {
       const escaped = str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       const regex = new RegExp(`\\b${escaped}\\b`, 'i');
-      if (regex.test(pomContent)) {
+      if (regex.test(content)) {
         violations.push(
           `${pomPath}: POM contains hardcoded persona data ("${str}"). ` +
           'POM locators and assertions must be dynamic and parameterized. ' +
@@ -160,44 +161,53 @@ function checkPomConventions(poms: Pom[], personaMap: PersonaMap): string[] {
   return violations;
 }
 
-const fixConventionsDoneTool: AgentTool = {
+function formatFilesForPrompt(files: FileEntry[]): string {
+  return files.map((f) => `### ${f.path} (role: ${f.role})\n\`\`\`typescript\n${f.content}\n\`\`\``).join('\n\n');
+}
+
+function mergeFiles(current: FileEntry[], changed: FileEntry[]): FileEntry[] {
+  const merged = [...current];
+  for (const file of changed) {
+    const idx = merged.findIndex((f) => f.path === file.path);
+    if (idx !== -1) merged[idx] = file;
+    else merged.push(file);
+  }
+  return merged;
+}
+
+const fixFilesDoneTool: AgentTool = {
   type: 'function',
   function: {
     name: 'done',
-    description: 'Submit corrected files. Call when all convention fixes are complete.',
+    description: 'Submit corrected files. Include ONLY the files you changed. Unchanged files will be preserved.',
     parameters: {
       type: 'object',
       properties: {
-        fixedSpec: {
-          type: 'string',
-          description: 'The corrected spec content.',
-        },
-        fixedPoms: {
+        files: {
           type: 'array',
-          description: 'Corrected POM files — include only the ones that changed.',
+          description: 'Only the files that changed. Omit files you did not modify.',
           items: {
             type: 'object',
             properties: {
-              pomContent: { type: 'string' },
-              pomPath: { type: 'string' },
+              path: { type: 'string', description: 'Repo-relative file path' },
+              content: { type: 'string', description: 'Full updated file content' },
+              role: { type: 'string', enum: ['spec', 'pom', 'fixture', 'extra'] },
             },
-            required: ['pomContent', 'pomPath'],
+            required: ['path', 'content', 'role'],
           },
         },
       },
-      required: ['fixedSpec'],
+      required: ['files'],
     },
   },
 };
 
 export interface SelfCorrectionResult {
   feature: string;
-  specContent: string;
-  poms: Array<{ pomContent: string; pomPath: string }>;
+  files: FileEntry[];
   affectedPaths: string;
-  fixtureUpdate?: string;
   tokenUsage: TokenUsage;
-  warned: boolean;        // true if tsc still failing after all attempts
+  warned: boolean;
   warningMessage?: string;
 }
 
@@ -210,99 +220,73 @@ function addTokenUsage(acc: TokenUsage, next: TokenUsage): TokenUsage {
   };
 }
 
-const fixDoneTool: AgentTool = {
-  type: 'function',
-  function: {
-    name: 'done',
-    description: 'Submit the corrected spec content. Call this when the fix is complete.',
-    parameters: {
-      type: 'object',
-      properties: {
-        fixedSpec: { type: 'string', description: 'The corrected Playwright TypeScript spec file content' },
-      },
-      required: ['fixedSpec'],
-    },
-  },
-};
-
 // Convention and TS fix agents only need validate_typescript + their done() — no browser tools.
-// Giving them browser tools causes them to behave like a full QA agent, re-exploring the app
-// and making it appear as though the main agent is still running after done() was called.
-const conventionOnlyTools: AgentTool[] = [validateTypescriptTool, fixConventionsDoneTool];
-const fixTools: AgentTool[] = [validateTypescriptTool, fixDoneTool];
+const fixFilesTools: AgentTool[] = [validateTypescriptTool, fixFilesDoneTool];
 
 // CI fix agent DOES need browser tools — it navigates to verify actual vs expected values.
-const ciFixTools: AgentTool[] = [...qaTools.filter((t) => t.function.name !== 'done'), fixDoneTool];
+const ciFixTools: AgentTool[] = [...qaTools.filter((t) => t.function.name !== 'done'), fixFilesDoneTool];
 
 export async function runWithSelfCorrection(
   task: QATask,
   branch: string,
 ): Promise<SelfCorrectionResult> {
   const maxAttempts = maxSelfCorrectionAttempts();
-
   const repoName = task.outputRepo;
 
   // Step 1: Initial QA agent run
   log('INFO', '[selfCorrection] Running initial qaAgent pass');
   const qaResult = await runQaAgent(task, branch, repoName);
   const feature = qaResult.feature;
-  let specContent = qaResult.enrichedSpec;
-  const poms = qaResult.poms;
+  let files = qaResult.files.map((f) => ({ ...f, role: f.role as FileEntry['role'] }));
   const affectedPaths = qaResult.affectedPaths;
-  const fixtureUpdate = qaResult.fixtureUpdate;
   let tokenUsage = qaResult.tokenUsage;
 
-  // Close any browser session left open by the QA agent — if done() was called without
-  // browser_close(), sessionActive stays true and the correction agents would inherit it.
+  // Close any browser session left open by the QA agent
   try {
     await browserHandlers.browser_close({});
   } catch {
-    // Session may already be closed — ignore
+    // ignore
   }
 
   // Step 2: Convention check — fix one violation at a time, re-check after each fix.
-  // Capped at maxAttempts to prevent infinite loops if the fix agent keeps reintroducing issues.
   const personaMap = await getPersonas(repoName, []);
   const MAX_CONVENTION_ROUNDS = maxAttempts;
 
   for (let round = 1; round <= MAX_CONVENTION_ROUNDS; round++) {
-    const specViolations = checkSpecConventions(specContent, personaMap);
-    const pomViolations = checkPomConventions(poms, personaMap);
+    const specFile = getSpecFile(files);
+    const pomFiles = getPomFiles(files);
+    const specViolations = specFile ? checkSpecConventions(specFile.content, personaMap) : [];
+    const pomViolations = checkPomConventions(pomFiles, personaMap);
     const allViolations = [...specViolations, ...pomViolations];
 
     if (allViolations.length === 0) break;
 
-    // Take only the first violation — surgical fix, then re-check
     const violation = allViolations[0];
     log('WARN', `[selfCorrection] Convention violation (round ${round}/${MAX_CONVENTION_ROUNDS}): ${violation}`);
     dashboardBus.emitEvent('correction', 'warn', `Convention violation (round ${round})`, { violation });
 
-    const pomSummary = poms.map((p) => `### ${p.pomPath}\n${p.pomContent}`).join('\n\n');
-
     const { args, tokenUsage: fixUsage } = await runAgent(
-      'Fix the single convention violation listed below in this Playwright spec and/or POM files. Fix ONLY what is listed — do not change any other logic.',
-      `VIOLATION:\n${violation}\n\n### Spec\n${specContent}\n\n${pomSummary}`,
-      conventionOnlyTools,
+      'Fix the single convention violation listed below. Fix ONLY what is listed — do not change any other logic.',
+      `VIOLATION:\n${violation}\n\n${formatFilesForPrompt(files)}`,
+      fixFilesTools,
       validateTypescriptHandler,
       { maxIterations: 10 },
     );
 
     tokenUsage = addTokenUsage(tokenUsage, fixUsage);
-    specContent = args.fixedSpec as string;
-
-    const fixedPoms = args.fixedPoms as Pom[] | undefined;
-    if (fixedPoms?.length) {
-      for (const fixed of fixedPoms) {
-        const idx = poms.findIndex((p) => p.pomPath === fixed.pomPath);
-        if (idx !== -1) poms[idx] = fixed;
-      }
-    }
+    const changedFiles = (args.files as FileEntry[] | undefined) ?? [];
+    files = mergeFiles(files, changedFiles);
 
     log('INFO', `[selfCorrection] Convention fix applied (round ${round})`);
     dashboardBus.emitEvent('correction', 'info', `Convention fix applied (round ${round})`, { tokenUsage: fixUsage });
 
     if (round === MAX_CONVENTION_ROUNDS) {
-      const remaining = [...checkSpecConventions(specContent, personaMap), ...checkPomConventions(poms, personaMap)];
+      const remainingSpec = getSpecFile(files);
+      const remainingPoms = getPomFiles(files);
+      const remaining = [
+        ...(remainingSpec ? checkSpecConventions(remainingSpec.content, personaMap) : []),
+        ...checkPomConventions(remainingPoms, personaMap),
+      ];
       if (remaining.length > 0) {
         log('WARN', `[selfCorrection] ${remaining.length} convention violation(s) remain after ${MAX_CONVENTION_ROUNDS} rounds: ${remaining.join('; ')}`);
         dashboardBus.emitEvent('correction', 'warn', 'Convention violations remain after max rounds', { violations: remaining });
@@ -310,54 +294,166 @@ export async function runWithSelfCorrection(
     }
   }
 
-  // Step 3: TypeScript validation loop — up to maxAttempts corrections
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    dashboardBus.emitEvent('validation', 'info', `TypeScript validation check (attempt ${attempt})`, { attempt });
-    const tsResultRaw = await validateTypescriptHandler.validate_typescript({ code: specContent });
+  // ─── Phase 1: Fast validation (convention + AST) ────────────────────────────
+  // Already done above. Now run AST validation on all .ts files.
+  // If AST errors exist, combine with any remaining convention errors and fix together.
+  const tsFiles = files.filter((f) => f.path.endsWith('.ts'));
+  let astErrors: Array<{ path: string; line: number; message: string }> = [];
+  for (const file of tsFiles) {
+    const fileType: 'spec' | 'pom' | 'generic' =
+      file.role === 'spec' ? 'spec' : file.role === 'pom' ? 'pom' : 'generic';
+    const tsResultRaw = await validateTypescriptHandler.validate_typescript({ code: file.content, fileType });
     const tsResult = JSON.parse(
       typeof tsResultRaw === 'string' ? tsResultRaw : JSON.stringify(tsResultRaw)
     ) as { valid: boolean; errors: Array<{ line: number; message: string }> };
+    if (!tsResult.valid) {
+      for (const err of tsResult.errors) {
+        astErrors.push({ path: file.path, line: err.line, message: err.message });
+      }
+    }
+  }
 
-    if (tsResult.valid) {
-      log('INFO', `[selfCorrection] TypeScript valid${attempt > 1 ? ` after ${attempt - 1} correction(s)` : ''}`);
-      dashboardBus.emitEvent('validation', 'info', 'TypeScript is valid', { valid: true });
-      return { feature, specContent, poms, affectedPaths, fixtureUpdate, tokenUsage, warned: false };
+  // Fix AST errors (if any) together with any lingering convention issues
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const specFile = getSpecFile(files);
+    const pomFiles = getPomFiles(files);
+    const specViolations = specFile ? checkSpecConventions(specFile.content, personaMap) : [];
+    const pomViolations = checkPomConventions(pomFiles, personaMap);
+    const conventionErrors = [...specViolations, ...pomViolations];
+
+    if (astErrors.length === 0 && conventionErrors.length === 0) {
+      log('INFO', `[selfCorrection] Phase 1 valid${attempt > 1 ? ` after ${attempt - 1} correction(s)` : ''}`);
+      dashboardBus.emitEvent('validation', 'info', 'Phase 1 (fast) validation passed', { valid: true });
+      break;
     }
 
-    log('WARN', `[selfCorrection] TypeScript errors on attempt ${attempt}/${maxAttempts}: ${JSON.stringify(tsResult.errors)}`);
-    dashboardBus.emitEvent('validation', 'warn', 'TypeScript errors found', { errors: tsResult.errors });
+    const combinedErrors = [
+      ...conventionErrors.map((m) => `CONVENTION: ${m}`),
+      ...astErrors.map((e) => `AST: ${e.path}(${e.line}): ${e.message}`),
+    ].join('\n');
 
-    if (attempt === maxAttempts) break;
+    log('WARN', `[selfCorrection] Phase 1 errors on attempt ${attempt}/${maxAttempts}`);
+    dashboardBus.emitEvent('validation', 'warn', 'Phase 1 errors found', { errors: combinedErrors });
 
-    const tsErrors = tsResult.errors.map((e) => `Line ${e.line}: ${e.message}`).join('\n');
+    if (attempt === maxAttempts) {
+      log('WARN', `[selfCorrection] Phase 1 exhausted after ${maxAttempts} attempts`);
+      break;
+    }
+
     const { args, tokenUsage: fixUsage } = await runAgent(
-      'Fix the TypeScript errors in this Playwright spec. Output only the corrected spec content.',
-      `TypeScript errors:\n${tsErrors}\n\nSpec:\n${specContent}`,
-      fixTools,
+      'Fix the convention and/or AST errors in the files below. Output only the changed files.',
+      `ERRORS:\n${combinedErrors}\n\n${formatFilesForPrompt(files)}`,
+      fixFilesTools,
       validateTypescriptHandler,
       { maxIterations: 10 },
     );
     tokenUsage = addTokenUsage(tokenUsage, fixUsage);
-    specContent = args.fixedSpec as string;
-    log('INFO', `[selfCorrection] Applied TypeScript correction ${attempt}`);
-    dashboardBus.emitEvent('correction', 'info', `Applied correction ${attempt}`, { tokenUsage: fixUsage });
+    const changedFiles = (args.files as FileEntry[] | undefined) ?? [];
+    files = mergeFiles(files, changedFiles);
+    log('INFO', `[selfCorrection] Applied Phase 1 correction ${attempt}`);
+    dashboardBus.emitEvent('correction', 'info', `Applied Phase 1 correction ${attempt}`, { tokenUsage: fixUsage });
+
+    // Re-run AST validation after fix
+    astErrors = [];
+    for (const file of files.filter((f) => f.path.endsWith('.ts'))) {
+      const fileType: 'spec' | 'pom' | 'generic' =
+        file.role === 'spec' ? 'spec' : file.role === 'pom' ? 'pom' : 'generic';
+      const tsResultRaw = await validateTypescriptHandler.validate_typescript({ code: file.content, fileType });
+      const tsResult = JSON.parse(
+        typeof tsResultRaw === 'string' ? tsResultRaw : JSON.stringify(tsResultRaw)
+      ) as { valid: boolean; errors: Array<{ line: number; message: string }> };
+      if (!tsResult.valid) {
+        for (const err of tsResult.errors) {
+          astErrors.push({ path: file.path, line: err.line, message: err.message });
+        }
+      }
+    }
   }
 
-  // Final validation after last correction
-  const finalRaw = await validateTypescriptHandler.validate_typescript({ code: specContent });
-  const finalResult = JSON.parse(
-    typeof finalRaw === 'string' ? finalRaw : JSON.stringify(finalRaw)
-  ) as { valid: boolean; errors: Array<{ line: number; message: string }> };
+  // ─── Phase 2: Slow validation (tsc + eslint) ────────────────────────────────
+  // Only run if Phase 1 passed (no remaining convention or AST errors).
+  const specFile = getSpecFile(files);
+  const pomFiles = getPomFiles(files);
+  const remainingConventions = [
+    ...(specFile ? checkSpecConventions(specFile.content, personaMap) : []),
+    ...checkPomConventions(pomFiles, personaMap),
+  ];
 
-  if (finalResult.valid) {
-    log('INFO', `[selfCorrection] TypeScript valid after ${maxAttempts} correction(s)`);
-    return { feature, specContent, poms, affectedPaths, fixtureUpdate, tokenUsage, warned: false };
+  if (remainingConventions.length === 0 && astErrors.length === 0) {
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      dashboardBus.emitEvent('validation', 'info', `Phase 2 validation (attempt ${attempt})`, { attempt });
+
+      let typeErrors: ValidationError[] = [];
+      let lintErrors: ValidationError[] = [];
+
+      try {
+        typeErrors = await runTypecheck(repoName, files);
+      } catch (err) {
+        log('WARN', `[selfCorrection] runTypecheck failed: ${(err as Error).message}`);
+      }
+
+      try {
+        lintErrors = await runLint(repoName, files);
+      } catch (err) {
+        log('WARN', `[selfCorrection] runLint failed: ${(err as Error).message}`);
+      }
+
+      const allPhase2Errors = [...typeErrors, ...lintErrors];
+
+      if (allPhase2Errors.length === 0) {
+        log('INFO', `[selfCorrection] Phase 2 valid${attempt > 1 ? ` after ${attempt - 1} correction(s)` : ''}`);
+        dashboardBus.emitEvent('validation', 'info', 'Phase 2 (tsc/eslint) validation passed', { valid: true });
+        return { feature, files, affectedPaths, tokenUsage, warned: false };
+      }
+
+      const errorSummary = allPhase2Errors
+        .map((e) => `[${e.source}] ${e.filePath}(${e.line}${e.column ? `,${e.column}` : ''}): ${e.message}`)
+        .join('\n');
+
+      log('WARN', `[selfCorrection] Phase 2 errors on attempt ${attempt}/${maxAttempts}:\n${errorSummary}`);
+      dashboardBus.emitEvent('validation', 'warn', 'Phase 2 errors found', { errors: allPhase2Errors });
+
+      if (attempt === maxAttempts) break;
+
+      const { args, tokenUsage: fixUsage } = await runAgent(
+        `Fix the TypeScript and/or ESLint errors in the files below. The project typechecker and linter found these errors:
+${errorSummary}
+
+You may need to:
+- Correct import paths
+- Fix type signatures
+- Update method calls to match existing interfaces
+- Resolve ESLint rule violations
+
+Output only the changed files.`,
+        `ERRORS:\n${errorSummary}\n\n${formatFilesForPrompt(files)}`,
+        fixFilesTools,
+        validateTypescriptHandler,
+        { maxIterations: 10 },
+      );
+      tokenUsage = addTokenUsage(tokenUsage, fixUsage);
+      const changedFiles = (args.files as FileEntry[] | undefined) ?? [];
+      files = mergeFiles(files, changedFiles);
+      log('INFO', `[selfCorrection] Applied Phase 2 correction ${attempt}`);
+      dashboardBus.emitEvent('correction', 'info', `Applied Phase 2 correction ${attempt}`, { tokenUsage: fixUsage });
+    }
   }
 
-  const errorSummary = finalResult.errors.map((e) => `Line ${e.line}: ${e.message}`).join('\n');
-  const warningMessage = `TypeScript still failing after ${maxAttempts} attempt(s):\n${errorSummary}`;
+  // If we reach here, Phase 2 failed or Phase 1 still has errors
+  const finalSpec = getSpecFile(files);
+  const finalPoms = getPomFiles(files);
+  const finalConventions = [
+    ...(finalSpec ? checkSpecConventions(finalSpec.content, personaMap) : []),
+    ...checkPomConventions(finalPoms, personaMap),
+  ];
+  const errorSummary = [
+    ...finalConventions.map((m) => `CONVENTION: ${m}`),
+    ...astErrors.map((e) => `AST: ${e.path}(${e.line}): ${e.message}`),
+  ].join('\n');
+
+  const warningMessage = `Validation failed after ${maxAttempts} attempt(s):\n${errorSummary}`;
   log('WARN', `[selfCorrection] ${warningMessage}`);
-  return { feature, specContent, poms, affectedPaths, fixtureUpdate, tokenUsage, warned: true, warningMessage };
+  return { feature, files, affectedPaths, tokenUsage, warned: true, warningMessage };
 }
 
 // ─── CI failure fix ────────────────────────────────────────────────────────────
@@ -397,30 +493,23 @@ If the element genuinely doesn't exist (e.g. admin page has no welcome heading),
 ## Done protocol
 1. Call validate_typescript on the fixed spec
 2. If valid, call done() immediately — do NOT make any other tool calls after validation passes
-3. In done(): fixedSpec = corrected spec, fixedPoms = array of {pomContent, pomPath} for each changed POM`;
+3. In done(): files = array of {path, content, role} for each changed file. Include ONLY changed files.`;
 
 export interface CiFixResult {
-  specContent: string;
-  poms: Pom[];
-  specPath: string | null;
+  files: FileEntry[];
   tokenUsage: TokenUsage;
 }
 
 const MAX_CI_FAILURES = 5;
 const MAX_ERROR_LINES = 25;
 
-// Keep only the meaningful part of a Playwright error — strip full stack traces.
-// The Expected/Received block and the immediate assertion location are enough.
 function trimFailureMessage(msg: string): string {
   const lines = msg.split('\n');
-  // Cut at "at " stack frame lines — everything from the first pure stack frame is noise
   const stackStart = lines.findIndex((l) => /^\s+at /.test(l));
   const trimmed = stackStart > 0 ? lines.slice(0, stackStart) : lines;
   return trimmed.slice(0, MAX_ERROR_LINES).join('\n').trim();
 }
 
-// Group failures by their root error pattern. When multiple tests share the
-// same Expected/Received cause, only the first representative is needed.
 function deduplicateFailures(failures: CiTestFailure[]): CiTestFailure[] {
   const seen = new Set<string>();
   return failures.filter((f) => {
@@ -444,9 +533,9 @@ export async function runWithCiFailureFix(
   dashboardBus.emitEvent('correction', 'info', `Fixing ${deduplicated.length} CI failure(s)`, { branch, feature, total: failures.length });
 
   const [currentSpec, currentPom, specPath] = await Promise.all([
-    getCurrentSpec(repoName, branch, task.taskId, feature),
-    getCurrentPOM(repoName, branch, feature),
-    getSpecPath(repoName, branch, task.taskId, feature),
+    getCurrentSpecOnBranch(repoName, branch, task.taskId, feature),
+    getCurrentPOMOnBranch(repoName, branch, feature),
+    getSpecPathOnBranch(repoName, branch, task.taskId, feature),
   ]);
 
   const failureSummary = deduplicated
@@ -479,16 +568,23 @@ Navigate to the relevant pages to verify actual values, then fix only the failin
     { maxIterations: 25 },
   );
 
-  let fixedSpec = args.fixedSpec as string;
-  const fixedPoms = (args.fixedPoms as Pom[] | undefined) ?? [];
   let tokenUsage = agentUsage;
+  let files = (args.files as FileEntry[] | undefined) ?? [];
+
+  // If the agent returned no files, use the current spec as fallback
+  if (files.length === 0 && currentSpec) {
+    files = [{ path: specPath ?? `tests/web/${feature}/${task.taskId}.spec.ts`, content: currentSpec, role: 'spec' }];
+  }
 
   log('INFO', `[ciFailureFix] Fix agent completed — $${tokenUsage.costUSD.toFixed(4)} USD`);
   dashboardBus.emitEvent('correction', 'info', 'CI failure fix applied', { tokenUsage });
 
-  // Structural guard: verify the agent actually validated before calling done().
-  // The system prompt asks for validate_typescript → done(), but nothing prevents skipping it.
-  const tsResultRaw = await validateTypescriptHandler.validate_typescript({ code: fixedSpec, fileType: 'spec' });
+  // Structural guard: validate the spec
+  const specFile = files.find((f) => f.role === 'spec');
+  const tsResultRaw = await validateTypescriptHandler.validate_typescript({
+    code: specFile?.content || currentSpec || '',
+    fileType: 'spec',
+  });
   const tsResult = JSON.parse(
     typeof tsResultRaw === 'string' ? tsResultRaw : JSON.stringify(tsResultRaw)
   ) as { valid: boolean; errors: Array<{ line: number; message: string }> };
@@ -499,18 +595,19 @@ Navigate to the relevant pages to verify actual values, then fix only the failin
 
     const tsErrors = tsResult.errors.map((e) => `Line ${e.line}: ${e.message}`).join('\n');
     const { args: fixArgs, tokenUsage: fixUsage } = await runAgent(
-      'Fix the TypeScript errors in this Playwright spec. Output only the corrected spec content.',
-      `TypeScript errors:\n${tsErrors}\n\nSpec:\n${fixedSpec}`,
-      fixTools,
+      'Fix the TypeScript errors in the files below. Output only the changed files.',
+      `TypeScript errors:\n${tsErrors}\n\n${formatFilesForPrompt(files)}`,
+      fixFilesTools,
       validateTypescriptHandler,
       { maxIterations: 10 },
     );
-    fixedSpec = fixArgs.fixedSpec as string;
+    const fixChangedFiles = (fixArgs.files as FileEntry[] | undefined) ?? [];
+    files = mergeFiles(files, fixChangedFiles);
     tokenUsage = addTokenUsage(tokenUsage, fixUsage);
 
     log('INFO', `[ciFailureFix] TS fix pass complete — $${tokenUsage.costUSD.toFixed(4)} USD total`);
     dashboardBus.emitEvent('correction', 'info', 'CI fix TS correction applied', { tokenUsage: fixUsage });
   }
 
-  return { specContent: fixedSpec, poms: fixedPoms, specPath, tokenUsage };
+  return { files, tokenUsage };
 }

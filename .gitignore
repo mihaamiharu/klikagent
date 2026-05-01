@@ -28,3 +28,6 @@ Thumbs.db
 
 # Dashboard Data
 data/
+
+# Local test repo cache
+.klikagent-tests-cache/

@@ -38,28 +38,27 @@ export const qaDoneTool: AgentTool = {
   type: 'function',
   function: {
     name: 'done',
-    description: 'Submit the complete spec, POM(s), POM path(s), and affected test paths. Call this after validate_typescript confirms no errors.',
+    description: 'Submit the complete set of files generated for this task. Call this after validate_typescript confirms no errors.',
     parameters: {
       type: 'object',
       properties: {
         feature: { type: 'string', description: 'The feature folder name you determined for this task (e.g. "auth", "doctors", "dashboard"). Must match an existing folder in pages/ or a key in fixtures/index.ts imports. NEVER use "general".' },
-        enrichedSpec: { type: 'string', description: 'Full Playwright TypeScript spec file content with real locators from browser snapshots' },
-        poms: {
+        files: {
           type: 'array',
-          description: 'List of Page Object Model files to write',
+          description: 'All files to commit for this task. Must include exactly one spec and at least one POM.',
           items: {
             type: 'object',
             properties: {
-              pomContent: { type: 'string', description: 'Full Page Object Model file content' },
-              pomPath: { type: 'string', description: 'Repo-relative path to write the POM file e.g. "pages/auth/AuthPage.ts". Must match the exported class name exactly.' },
+              path: { type: 'string', description: 'Repo-relative file path e.g. "tests/web/auth/KA-42.spec.ts"' },
+              content: { type: 'string', description: 'Full file content' },
+              role: { type: 'string', enum: ['spec', 'pom', 'fixture', 'extra'], description: 'spec = test file (required, exactly 1), pom = Page Object Model (required, at least 1), fixture = fixtures/index.ts update, extra = any other file (helpers, mock data, config)' },
             },
-            required: ['pomContent', 'pomPath'],
+            required: ['path', 'content', 'role'],
           },
         },
         affectedPaths: { type: 'string', description: 'Comma-separated test paths affected by the PR diff e.g. "tests/web/auth/,tests/web/checkout/"' },
-        fixtureUpdate: { type: 'string', description: 'Full updated content of fixtures/index.ts with the new POM(s) imported and registered. REQUIRED whenever poms contains any new POM — omit only if every POM in poms is already registered in the current fixtures/index.ts.' },
       },
-      required: ['feature', 'enrichedSpec', 'poms', 'affectedPaths', 'fixtureUpdate'],
+      required: ['feature', 'files', 'affectedPaths'],
     },
   },
 };
@@ -204,7 +203,7 @@ export const validateTypescriptTool: AgentTool = {
       type: 'object',
       properties: {
         code:     { type: 'string', description: 'TypeScript code to validate' },
-        fileType: { type: 'string', enum: ['spec', 'pom'], description: '"spec" for test files, "pom" for Page Object Models. Spec-only checks (no page.getBy* in spec, no hardcoded persona names) only run for specs.' },
+        fileType: { type: 'string', enum: ['spec', 'pom', 'generic'], description: '"spec" for test files, "pom" for Page Object Models, "generic" for any other TypeScript file. Spec-only checks (no page.getBy* in spec, no hardcoded persona names) only run for specs. Generic mode skips convention checks and only validates AST parse + basic patterns.' },
       },
       required: ['code', 'fileType'],
     },

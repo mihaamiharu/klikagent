@@ -121,16 +121,10 @@ dashboardRoutes.post('/api/runs/:id/fix', (req: Request, res: Response) => {
     try {
       const result = await runWithCiFailureFix(task, branch, feature, failures);
 
-      if (result.specPath && result.specContent) {
+      for (const file of result.files) {
         await commitFile(
-          task.outputRepo, branch, result.specPath, result.specContent,
-          `fix(spec): address CI failures for #${task.taskId} [klikagent]`,
-        );
-      }
-      for (const { pomContent, pomPath } of result.poms) {
-        await commitFile(
-          task.outputRepo, branch, pomPath, pomContent,
-          `fix(pom): update ${feature} POM for #${task.taskId} [klikagent]`,
+          task.outputRepo, branch, file.path, file.content,
+          `fix(${file.role}): address CI failures for #${task.taskId} [klikagent]`,
         );
       }
 

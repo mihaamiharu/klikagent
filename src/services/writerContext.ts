@@ -1,4 +1,4 @@
-import * as testRepo from './testRepo';
+import * as localRepo from './localRepo';
 import { WriterContext } from '../types';
 import { formatGoldenExamples } from '../agents/goldenExamples';
 
@@ -18,17 +18,35 @@ interface BaseContext {
  */
 export async function prefetchBaseContext(repoName: string): Promise<BaseContext> {
   const [fixtures, personas, contextDocsMap, availablePoms] = await Promise.all([
-    testRepo.getFixtures(repoName),
-    testRepo.getPersonas(repoName),
-    testRepo.getContextDocs(repoName),
-    testRepo.listAllPOMs(repoName),
+    localRepo.readFile(repoName, 'fixtures/index.ts'),
+    localRepo.readFile(repoName, 'config/personas.ts'),
+    readContextDocs(repoName),
+    localRepo.listAllPoms(repoName),
   ]);
 
   const contextDocs = Object.entries(contextDocsMap)
     .map(([file, content]) => `## ${file}\n${content}`)
     .join('\n\n');
 
-  return { fixtures, personas, contextDocs, availablePoms, goldenExamples: formatGoldenExamples() };
+  return {
+    fixtures: fixtures ?? '',
+    personas: personas ?? '',
+    contextDocs,
+    availablePoms,
+    goldenExamples: formatGoldenExamples(),
+  };
+}
+
+async function readContextDocs(repoName: string): Promise<Record<string, string>> {
+  const files = await localRepo.listDirectory(repoName, 'context');
+  const mdFiles = files.filter((f) => f.endsWith('.md'));
+  const entries = await Promise.all(
+    mdFiles.map(async (f) => {
+      const content = await localRepo.readFile(repoName, `context/${f}`);
+      return [f, content ?? ''] as [string, string];
+    }),
+  );
+  return Object.fromEntries(entries.filter(([, v]) => v !== ''));
 }
 
 /**
@@ -40,10 +58,29 @@ async function prefetchFeatureContext(
   feature: string,
 ): Promise<Pick<WriterContext, 'existingTests' | 'existingPom'>> {
   const [existingTestsMap, existingPom] = await Promise.all([
-    testRepo.getExistingTests(repoName, feature),
-    testRepo.getExistingPOM(repoName, feature),
+    readExistingTests(repoName, feature),
+    readExistingPom(repoName, feature),
   ]);
   return { existingTests: existingTestsMap, existingPom };
+}
+
+async function readExistingTests(repoName: string, feature: string): Promise<Record<string, string>> {
+  const files = await localRepo.listDirectory(repoName, `tests/web/${feature}`);
+  const specFiles = files.filter((f) => f.endsWith('.spec.ts'));
+  const entries = await Promise.all(
+    specFiles.map(async (f) => {
+      const content = await localRepo.readFile(repoName, `tests/web/${feature}/${f}`);
+      return [f, content ?? ''] as [string, string];
+    }),
+  );
+  return Object.fromEntries(entries.filter(([, v]) => v !== ''));
+}
+
+async function readExistingPom(repoName: string, feature: string): Promise<string | null> {
+  const files = await localRepo.listDirectory(repoName, `pages/${feature}`);
+  const pomFile = files.find((n) => n.endsWith('Page.ts'));
+  if (!pomFile) return null;
+  return localRepo.readFile(repoName, `pages/${feature}/${pomFile}`);
 }
 
 /**
