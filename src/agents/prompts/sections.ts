@@ -170,7 +170,10 @@ export const SPEC_RULES = `## Spec writing rules
   await authPage.login('nonexistent@example.com', 'wrongpassword');
   NEVER invent a personas.X key that does not exist in the personas config — personas.nonExistent is INVALID and will cause a TypeScript error.
 - ALWAYS import test and expect from the project fixture layer — NEVER from @playwright/test directly:
-  import { test, expect } from '../../../fixtures';  (adjust the relative depth for the spec file location)
+  import { test, expect } from '../../../fixtures';  (specs live at tests/web/{feature}/ — always 3 levels up)
+- When importing a POM class inline (persona fixture pattern), use the same depth:
+  import { DashboardPage } from '../../../pages/book-appointment/DashboardPage';
+  NEVER use '../../pages/...' — specs are always 3 levels deep, not 2.
 - The pomPath field must be the repo-relative path matching the exported class name exactly e.g. "pages/auth/AuthPage.ts"
 - The affectedPaths field should list test folders impacted by this task
 - CRITICAL — POM method usage: You MUST use the POM for ALL interactions AND assertions on page elements. NEVER use \`page.locator\` or \`page.getBy*\` directly in the spec file. Define locators as POM properties and assertion helpers as POM methods, then call them from the spec. For example:
