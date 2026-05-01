@@ -49,7 +49,7 @@ export const qaDoneTool: AgentTool = {
           items: {
             type: 'object',
             properties: {
-              path: { type: 'string', description: 'Repo-relative file path e.g. "tests/web/auth/KA-42.spec.ts"' },
+              path: { type: 'string', description: 'Repo-relative file path. Spec must be at tests/web/{feature}/{feature}.spec.ts (e.g. "tests/web/auth/auth.spec.ts"). POM must be at pages/{feature}/ClassName.ts.' },
               content: { type: 'string', description: 'Full file content' },
               role: { type: 'string', enum: ['spec', 'pom', 'fixture', 'extra'], description: 'spec = test file (required, exactly 1), pom = Page Object Model (required, at least 1), fixture = fixtures/index.ts update, extra = any other file (helpers, mock data, config)' },
             },

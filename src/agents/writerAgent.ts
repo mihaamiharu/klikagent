@@ -87,7 +87,7 @@ ${formatWriterContext(ctx)}
 
 ## Your task
 Using the ExplorationReport above:
-1. Write a complete Playwright spec at tests/web/${report.feature}/${task.taskId}-<slug>.spec.ts
+1. Write a complete Playwright spec at tests/web/${report.feature}/${report.feature}.spec.ts
    - Import: import { test, expect } from '../../../fixtures';
    - Import: import { personas } from '../../../config/personas';
    - Import POM: import { ClassName } from '../../../pages/${report.feature}/ClassName'; (3 levels up from tests/web/feature/)

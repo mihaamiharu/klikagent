@@ -669,7 +669,7 @@ Navigate to the relevant pages to verify actual values, then fix only the failin
 
   // If the agent returned no files, use the current spec as fallback
   if (files.length === 0 && currentSpec) {
-    files = [{ path: specPath ?? `tests/web/${feature}/${task.taskId}.spec.ts`, content: currentSpec, role: 'spec' }];
+    files = [{ path: specPath ?? `tests/web/${feature}/${feature}.spec.ts`, content: currentSpec, role: 'spec' }];
   }
 
   log('INFO', `[ciFailureFix] Fix agent completed — $${tokenUsage.costUSD.toFixed(4)} USD`);
