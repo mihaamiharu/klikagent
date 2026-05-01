@@ -345,7 +345,51 @@ export async function getPlaywrightConfig(repoName: string): Promise<string> {
 }
 
 export async function getPersonas(repoName: string): Promise<string> {
-  return await readFile(repoName, 'config/personas.ts') ?? '';
+  const content = await readFile(repoName, 'config/personas.ts') ?? '';
+  if (!content) return '';
+
+  // Parse the personas to extract a structured schema summary
+  const schema = parsePersonasSchema(content);
+  if (!schema) return content;
+
+  // Return both the raw file and a clear schema summary for the agent
+  return `${content}
+
+## Persona Schema Summary (for reference)
+Valid persona keys: ${schema.keys.join(', ')}
+Valid properties on each persona: ${schema.properties.join(', ')}
+
+Usage examples:
+  personas.${schema.keys[0]}.email        // login credential
+  personas.${schema.keys[0]}.password     // login credential
+  personas.${schema.keys[0]}.displayName  // for UI assertions
+  personas.${schema.keys[0]}.role         // for role-based assertions
+
+NEVER invent a persona key or property that is not listed above.`;
+}
+
+/**
+ * Extract persona keys and properties from raw personas.ts content.
+ * Returns null if parsing fails.
+ */
+function parsePersonasSchema(content: string): { keys: string[]; properties: string[] } | null {
+  const keys: string[] = [];
+  const allProperties = new Set<string>();
+  const entryPattern = /(\w+):\s*\{([^}]+)\}/g;
+  let match: RegExpExecArray | null;
+
+  while ((match = entryPattern.exec(content)) !== null) {
+    const [, key, block] = match;
+    keys.push(key);
+    const fieldPattern = /(\w+):\s*'([^']*)'/g;
+    let fieldMatch: RegExpExecArray | null;
+    while ((fieldMatch = fieldPattern.exec(block)) !== null) {
+      allProperties.add(fieldMatch[1]);
+    }
+  }
+
+  if (keys.length === 0) return null;
+  return { keys, properties: Array.from(allProperties) };
 }
 
 export async function getFixtures(repoName: string): Promise<string> {

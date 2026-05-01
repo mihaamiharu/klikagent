@@ -173,6 +173,11 @@ export const SPEC_RULES = `## Spec writing rules
 - For negative test cases that deliberately use invalid/non-existent credentials (e.g. testing an "invalid email" error state), use a descriptive literal string:
   await authPage.login('nonexistent@example.com', 'wrongpassword');
   NEVER invent a personas.X key that does not exist in the personas config — personas.nonExistent is INVALID and will cause a TypeScript error.
+- CRITICAL — Persona key validation: After calling get_personas, the response includes a "Persona Schema Summary" section. ONLY use the persona keys and properties listed there. Common mistakes:
+  - personas.restricted → INVALID (no such key exists)
+  - personas.patient.key → INVALID (no "key" property exists)
+  - personas.admin.urlSlug → INVALID (no "urlSlug" property exists)
+  If you need a persona for an access-control test, pick from the ACTUAL keys (e.g. admin, doctor, patient) based on which role the task describes. When in doubt, use a string literal for invalid credentials instead of inventing a persona key.
 - ALWAYS import test and expect from the project fixture layer — NEVER from @playwright/test directly:
   import { test, expect } from '../../../fixtures';  (adjust the relative depth for the spec file location)
 - The path field in files[] must be the repo-relative path matching the exported class name exactly e.g. "pages/auth/AuthPage.ts"
