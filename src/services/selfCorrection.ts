@@ -16,15 +16,19 @@ function getForbiddenPersonaStrings(personaMap: PersonaMap): string[] {
   const forbidden = new Set<string>();
   for (const persona of Object.values(personaMap)) {
     for (const [key, value] of Object.entries(persona)) {
+      // Skip credentials — those are checked separately
       if (key === 'password' || key === 'email') continue;
+      // Skip role — it's a structural category, not persona-specific data.
+      // Role values like "admin", "doctor", "patient" appear naturally in
+      // comments, test descriptions, and URL paths and cause false positives.
+      if (key === 'role') continue;
       if (typeof value === 'string' && value.length > 2) {
         forbidden.add(value);
       }
     }
   }
-  for (const role of Object.keys(personaMap)) {
-    if (role.length > 2) forbidden.add(role);
-  }
+  // Don't add persona keys as forbidden strings — they appear in
+  // `personas.admin.displayName` references which are the correct pattern.
   return Array.from(forbidden);
 }
 
@@ -85,18 +89,34 @@ function stripUrlRegexPatterns(content: string): string {
     .replace(/toHaveURL\s*\(\s*['"`][^'"`]*['"`]\s*\)/g, 'toHaveURL("STRIPPED")');
 }
 
+/**
+ * Strip single-line and multi-line comments from spec content before convention checks.
+ * Comments like `// admin should be redirected` or `/* patient flow *\/` contain
+ * role names as natural language and should not trigger persona-data violations.
+ */
+function stripComments(content: string): string {
+  return content
+    // Multi-line comments
+    .replace(/\/\*[\s\S]*?\*\//g, '/* STRIPPED */')
+    // Single-line comments
+    .replace(/\/\/.*$/gm, '// STRIPPED');
+}
+
 function checkSpecConventions(specContent: string, personaMap: PersonaMap): string[] {
   const violations: string[] = [];
   const forbiddenStrings = getForbiddenPersonaStrings(personaMap);
 
-  // Strip test descriptions, route paths, fixture parameters, and URL regex patterns
-  // before checking for forbidden strings. Test titles like 'BA-2: admin role is redirected...',
-  // route patterns like '/admin/dashboard', fixture names like { asAdmin }, and URL
-  // regexes like /\/admin/ should not trigger persona-data violations.
+  // Strip comments, test descriptions, route paths, fixture parameters, and URL regex patterns
+  // before checking for forbidden strings. Comments like `// admin should be redirected`,
+  // test titles like 'BA-2: admin role is redirected...', route patterns like '/admin/dashboard',
+  // fixture names like { asAdmin }, and URL regexes like /\/admin/ should not trigger
+  // persona-data violations.
   const checkableContent = stripUrlRegexPatterns(
     stripRoutePaths(
       stripTestDescriptions(
-        stripFixtureParameters(specContent)
+        stripFixtureParameters(
+          stripComments(specContent)
+        )
       )
     )
   );
