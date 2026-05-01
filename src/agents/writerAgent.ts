@@ -91,7 +91,7 @@ Using the ExplorationReport above:
    - Import: import { test, expect } from '../../../fixtures';
    - Import: import { personas } from '../../../config/personas';
    - Import POM: import { ClassName } from '../../../pages/${report.feature}/ClassName'; (3 levels up from tests/web/feature/)
-   - Always use fixture parameters for POMs — if you create a new POM, you MUST register it in fixtures/index.ts and include the updated fixtures/index.ts in your files[] with role="fixture"
+   - Construct POM inline using persona fixtures (asPatient, asDoctor, asAdmin) — do NOT register feature POMs in fixtures/index.ts
    - For each missingLocator, emit a test.skip with the reason from the report
 2. Write or update the POM at pages/${report.feature}/<ClassName>.ts
    - Use ONLY locators from the ExplorationReport — never invent selectors
