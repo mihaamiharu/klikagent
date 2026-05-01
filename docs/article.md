@@ -52,9 +52,10 @@ Behind the scenes, an AI agent logs into the app as a patient, navigates to the 
 
 The draft PR contains:
 
-- **A spec file** — `tests/web/auth/test-patient-login-flow.spec.ts` — with test cases for the happy path and the error state
+- **A spec file** — `tests/web/auth/auth.spec.ts` — with test cases for the happy path and the error state
 - **A Page Object Model** — `pages/auth/AuthPage.ts` — with typed locators and action methods
-- **A fixture update** — `fixtures/index.ts` — so the POM is available across the test suite
+
+For auth tests, the spec consumes the pre-registered `authPage` fixture. For feature tests in any other area, the persona fixtures (`asPatient`, `asDoctor`, `asAdmin`) provide a pre-authenticated `Page` and the spec constructs its feature POM inline — no fixture file changes needed.
 
 The engineer reviews it, adjusts anything that looks off, and merges. CI runs the tests. The dashboard updates.
 
@@ -140,7 +141,7 @@ Separating them lets each agent do exactly one thing well. The Explorer browses 
 
 Under the hood, the Explorer uses **playwright-cli** — a lightweight CLI wrapper around Playwright that maintains a persistent browser session across sequential tool calls. This is a deliberate choice over the Playwright MCP server: playwright-cli keeps state between calls without spawning a new browser process each time, which matters when you're navigating across multiple routes in a single agent run.
 
-Instead of taking screenshots or dumping raw HTML, `browser_list_interactables()` returns a **YAML accessibility tree** with element refs:
+Instead of taking screenshots or dumping raw HTML, `browser_navigate` returns a **YAML accessibility tree** with element refs:
 
 ```yaml
 - textbox "Email" [ref=e3]
@@ -152,7 +153,11 @@ The agent uses these refs to interact with elements. Every `browser_click` and `
 
 The Explorer collects these `generatedCode` values as it navigates and packages them into the `ExplorationReport`. The Writer receives them as ready-to-use locator strings — no guessing, no hallucinated selectors.
 
+Persona auth state lives at `.playwright-auth/{persona}.json`. Pass `persona="patient"` to `browser_navigate` and the storageState is loaded automatically; pass a different persona on the next call and the session switches over without a manual logout/login cycle.
+
 The handoff point — the `ExplorationReport` — is where the two agents meet. It's a typed contract. The Explorer is responsible for filling it completely. The Writer is responsible for trusting it and generating from it. Neither agent needs to know how the other works.
+
+While the Explorer is browsing — usually the longest phase of a run — the orchestrator prefetches the parts of the Writer's context that don't depend on the feature name yet (fixtures, personas, context docs, the list of available POMs, the golden-pattern snippets). By the time exploration finishes, only the feature-specific pieces (existing tests in `tests/web/{feature}/`, any existing POM) remain to be loaded. That overlap is free latency.
 
 ---
 
@@ -162,49 +167,45 @@ Generating code with an LLM is easy. Generating code you can actually trust to l
 
 The first draft from the Writer agent is a starting point, not a finished product. It might have TypeScript errors — wrong import paths, missing types, incorrect method signatures. It might also violate conventions your team has agreed on, like using `page.locator()` directly in a spec instead of going through the Page Object Model.
 
-Catching these problems before the code is committed is the job of the self-correction loop.
+Catching these problems before the code is committed is the job of the self-correction loop. It runs in two phases.
 
-After the Writer calls `qa_done()`, two checks run automatically.
+**Phase 1 — Fast checks, in process.**
 
-**Check 1 — TypeScript validation:**
+Right after the Writer calls `qa_done()`, the orchestrator runs roughly a dozen convention rules (regex and lightweight AST) plus an in-memory TypeScript parse on each generated file. These catch the cheap mistakes:
 
-```bash
-tsc --noEmit
+- Direct `page.locator()` or `page.getBy*()` in specs (everything must go through a POM)
+- Hardcoded persona display names, emails, or passwords in spec or POM
+- Persona references that don't exist (`personas.guest` when the schema only has `patient`/`doctor`/`admin`)
+- Hardcoded persona emails passed to `.login(...)` calls
+- `beforeEach` login patterns (feature tests should use the persona fixtures instead)
+- Bare `{ page }` destructuring in feature tests (use `asPatient` / `asDoctor` / `asAdmin`)
+- Manual POM construction with `new XPage(page)` at module scope
+- Jest-only patterns (`test.each`, `describe.each`) that don't exist in Playwright
+- POM import paths that don't resolve from `tests/web/{feature}/` (must be `../../../pages/...`)
+- Feature POMs registered as fixtures (only the auth POM and persona pages belong there)
+
+When violations are found, they're partitioned by target file and a small fleet of fix agents runs in parallel — bounded to two at a time. Each agent only sees the file it owns plus the spec for context, fixes the violations listed for that file, and returns the changed content. Results are merged, the checks re-run, and the cycle repeats. The default budget is up to ten rounds, though most runs finish in one or two.
+
+**Phase 2 — Slow checks, against the real toolchain.**
+
+Once Phase 1 is clean, the orchestrator copies the local clone of the test repo into a temp directory, symlinks `node_modules` (so it's effectively free), writes the generated files in, and runs the actual `tsc --noEmit` and `eslint` against it. Errors that survived the AST check — wrong method signatures on real POM classes, broken imports against the actual fixtures, ESLint rule violations — surface here. Each error is fed back to a fix agent with the precise compiler output until the toolchain is happy.
+
+This two-phase split exists because the cost profile is asymmetric. Phase 1 runs in milliseconds and catches 90% of issues. Phase 2 takes seconds (cloning, compiling, linting) but is the only thing that can certify the code will actually build inside the test repo's exact environment. Running Phase 2 first would burn time on issues a regex would have caught for free.
+
 ```
-
-If there are type errors, they get fed back to the agent as a correction prompt. The agent sees the exact compiler output, fixes the code, and the check runs again. This repeats up to a configured maximum — currently 2 attempts.
-
-**Check 2 — Convention checks:**
-
-TypeScript validation catches structural errors, but it can't catch semantic ones. For that, a second pass runs three convention checks:
-
-| Check | Rule |
-|---|---|
-| No hardcoded credentials | Spec must not contain raw email or password strings |
-| POM-only locators | `page.locator()` must not appear directly in the spec — only inside the Page Object Model |
-| POM is used | The generated POM must be imported and actually used in the spec |
-
-These rules exist because they're the most common ways a generated spec looks correct but isn't maintainable. Hardcoded credentials break when passwords rotate. Locators in specs bypass the abstraction layer entirely. A POM that was generated but never imported is dead code.
-
-If any check fails, the violation gets fed back to the agent the same way TypeScript errors do — as a specific, actionable message. The agent fixes it and the checks run again.
-
-```
-Writer produces spec + POM
+Writer produces files[]
         │
-        ├── tsc --noEmit ──── errors? → feed back → retry
+        ├── Phase 1 — convention checks + in-memory AST
+        │       violations? → parallel fix agents (one per file) → re-check
         │
-        └── Convention checks
-              no hardcoded creds?
-              no page.locator() in spec?
-              POM imported and used?
-                    │
-                    └── violation? → feed back → retry
+        └── Phase 2 — temp clone + tsc + eslint
+                errors?      → fix agent → re-check
                               │
                               └── max attempts reached?
                                     → commit anyway, flag in TaskResult
 ```
 
-One important detail: if all attempts fail, the spec is still committed. A flagged draft PR that needs human review is more useful than a silent failure. The `TaskResult` includes a warning, the PR description calls it out, and the QA engineer can fix it during review.
+If both phases exhaust their attempts, the files are still committed. A flagged draft PR that needs human review is more useful than a silent failure. The `TaskResult` carries `warned: true` and a `warningMessage`, the trigger marks the PR accordingly, and the QA engineer fixes it during review.
 
 This is the same philosophy as the draft PR itself — the agent produces a candidate, the human makes the final call.
 
@@ -260,7 +261,7 @@ Building KlikAgent was straightforward in concept and messy in practice. Here's 
 
 **Getting the browser automation layer right took several attempts.** The first version used the Playwright API directly. The second tried the Playwright MCP server — but execution was slow and token costs were significant, since each MCP tool call spins up its own context with no shared session state. The third switched to `@playwright/cli`. The fourth landed on `playwright-cli` — a persistent session wrapper that keeps browser state across tool calls without spawning a new process each time. Each switch was driven by a real problem: the direct API couldn't maintain session state cleanly across sequential agent calls, MCP was too expensive to run at scale, and the first CLI version had path resolution issues in Docker that took multiple attempts to fix. Getting Chromium installed correctly in the production container alone produced five separate commits.
 
-**The self-correction loop was harder to get right than expected.** The first version fed all violations back to the agent at once. The problem: the agent would fix one violation and accidentally introduce another. The fix was to process violations one at a time, re-check after each fix, and only move on when clean. The regex lookbehind patterns for detecting `page.locator()` in specs also needed several iterations to avoid false positives on POM files.
+**The self-correction loop was harder to get right than expected.** The first version fed all violations back to the agent at once. The problem: the agent would fix one violation and accidentally introduce another. The fix evolved through several stages — first processing one violation at a time, then partitioning violations by target file and running fix agents in parallel with bounded concurrency, so a multi-file run resolves in one round-trip rather than serializing. Detecting `page.locator()` and `page.getBy*()` calls in specs without false-positive matches inside the POM, comments, test descriptions, route paths, fixture parameter names, or URL regex patterns took multiple iterations of stripping passes layered on top of each other.
 
 **Stopping the agent from hardcoding credentials was genuinely difficult.** This sounds trivial but it isn't. The agent naturally reaches for the credentials it was given at the start of a run and writes them directly into specs. Getting it to consistently use the personas fixture instead required building a dynamic convention check that reads the actual persona values from config at runtime and checks the spec against them — not a static string match. Several commits were dedicated to getting this right, including cases where the persona cache was empty or env var fallbacks were incorrectly applied.
 
@@ -282,19 +283,15 @@ KlikAgent works well enough to be useful, but there are honest limitations worth
 
 **The in-memory store doesn't survive restarts.** The trigger service stores the mapping between a `taskId` and the originating GitHub issue in memory. If the process restarts while a task is in flight, the callback won't know which issue to comment on. This is fine for a self-hosted single-team setup but would need a persistent store for anything more.
 
-**The CI feedback loop is partially wired.** The infrastructure for CI to report test failures back to the orchestrator exists — `POST /tasks/:id/results` — but the full patch loop (agent reads failure output, fixes spec, commits) isn't complete yet. Right now, CI failures land in the dashboard but don't automatically trigger a fix. That's the next phase.
-
 **It's one model, one provider.** The OpenAI-compatible SDK makes swapping providers easy, but the system has only been tested with MiniMax M2.7 at 204k context. A model with a smaller context window or weaker tool-call support will behave differently, and the prompts haven't been tuned for anything else.
 
-**Fixture updates are append-only.** When the agent adds a new POM, it appends the import to `fixtures/index.ts`. It doesn't clean up, reorganize, or handle cases where a POM was renamed or removed. Over time, with enough generated PRs merging, the fixture file will need occasional manual housekeeping.
+**The convention checker is opinionated, and that's a feature.** The full set of rules — persona usage, fixture patterns, import paths, POM structure — encodes how _this_ system thinks Playwright tests should look. Teams with a different house style would need to edit the checks. The rules live in code, not config.
 
 ---
 
 ## 8. What's Next
 
 KlikAgent is working, but it's not finished. A few things are clearly next.
-
-**Closing the CI feedback loop.** The infrastructure is there — CI reports results to `POST /tasks/:id/results`, the orchestrator receives them. What's missing is the patch agent that reads the actual Playwright error output, understands which assertion failed and why, and commits a fix to the same branch. This is the most impactful thing on the roadmap. Right now a failing CI run requires manual intervention. With the loop closed, it becomes another iteration the agent handles automatically.
 
 **Persistent storage.** Replacing the in-memory run store and issue ref store with something durable — even just a SQLite file — would make the system reliable across restarts and give the dashboard real historical data rather than only the current process lifetime.
 
