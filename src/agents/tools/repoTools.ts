@@ -9,7 +9,7 @@ export const repoReadToolDefs: AgentTool[] = [
     type: 'function',
     function: {
       name: 'get_personas',
-      description: 'Get config/personas.ts — typed credential objects for all test personas (admin, doctor, patient). Use these in specs instead of hardcoding email/password strings.',
+      description: 'Get config/personas.ts — typed credential objects for all test personas. Response includes the raw file plus a Persona Schema Summary listing all valid persona keys and properties. Use ONLY the keys and properties listed in the schema — NEVER invent personas.X or personas.X.Y that are not in the summary. For deliberately-invalid credentials, use string literals like \'nonexistent@example.com\' instead of inventing a persona key.',
       parameters: { type: 'object', properties: {}, required: [] },
     },
   },

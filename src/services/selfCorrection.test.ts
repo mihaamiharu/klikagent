@@ -216,15 +216,16 @@ describe('runWithSelfCorrection', () => {
 
     await runWithSelfCorrection(baseTask, 'qa/42-test');
 
-    // Fix agent called exactly twice — once per violation
+    // Fix agent called twice — first round sends both violations together (parallel by file),
+    // second round handles the remaining violation after re-check.
     expect(mockRunAgent).toHaveBeenCalledTimes(2);
     expect(mockRunAgent).toHaveBeenNthCalledWith(1,
-      expect.stringContaining('single convention violation'),
+      expect.stringContaining('Fix ALL convention violations'),
       expect.stringContaining('personas.user.firstName'),
       expect.any(Array), expect.any(Object), expect.any(Object),
     );
     expect(mockRunAgent).toHaveBeenNthCalledWith(2,
-      expect.stringContaining('single convention violation'),
+      expect.stringContaining('Fix ALL convention violations'),
       expect.stringContaining('personas.user.route'),
       expect.any(Array), expect.any(Object), expect.any(Object),
     );

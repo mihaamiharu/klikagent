@@ -190,9 +190,15 @@ function checkSpecConventions(specContent: string, personaMap: PersonaMap): stri
       if (!reportedPersonaViolations.has(violationKey)) {
         reportedPersonaViolations.add(violationKey);
         const validKeys = Object.keys(personaMap).join(', ');
+        // Find the line containing this reference for context
+        const lines = specContent.split('\n');
+        const lineIndex = lines.findIndex(l => l.includes(`personas.${key}.${prop}`));
+        const lineContext = lineIndex >= 0 ? ` (line ${lineIndex + 1}: ${lines[lineIndex].trim().slice(0, 80)})` : '';
         violations.push(
-          `Spec references \`personas.${key}\` which is not a valid persona key. ` +
+          `Spec references \`personas.${key}\` which is not a valid persona key${lineContext}. ` +
           `Valid keys are: ${validKeys}. ` +
+          `FIX: Replace \`personas.${key}\` with an existing key that matches the test scenario. ` +
+          `For access-control tests, use the persona whose role matches the acceptance criteria. ` +
           `For deliberately-invalid credentials, use a string literal like 'nonexistent@example.com' instead of inventing a persona key.`,
         );
       }
@@ -203,9 +209,13 @@ function checkSpecConventions(specContent: string, personaMap: PersonaMap): stri
       const violationKey = `prop:${key}.${prop}`;
       if (!reportedPersonaViolations.has(violationKey)) {
         reportedPersonaViolations.add(violationKey);
+        const lines = specContent.split('\n');
+        const lineIndex = lines.findIndex(l => l.includes(`personas.${key}.${prop}`));
+        const lineContext = lineIndex >= 0 ? ` (line ${lineIndex + 1}: ${lines[lineIndex].trim().slice(0, 80)})` : '';
         violations.push(
-          `Spec references \`personas.${key}.${prop}\` which is not a valid property on that persona. ` +
-          `Valid properties for \`personas.${key}\` are: ${validProps.join(', ')}.`,
+          `Spec references \`personas.${key}.${prop}\` which is not a valid property${lineContext}. ` +
+          `Valid properties for \`personas.${key}\` are: ${validProps.join(', ')}. ` +
+          `FIX: Replace \`.${prop}\` with a valid property like .displayName, .email, .password, or .role.`,
         );
       }
     }
@@ -297,6 +307,190 @@ function mergeFiles(current: FileEntry[], changed: FileEntry[]): FileEntry[] {
   return merged;
 }
 
+// ─── Parallel convention fix helpers ─────────────────────────────────────────
+
+interface FileFixTask {
+  filePath: string;
+  violations: string[];
+}
+
+interface FixAgentResult {
+  filePath: string;
+  changedFiles: FileEntry[];
+  tokenUsage: TokenUsage;
+  remainingViolations: number;
+  success: boolean;
+}
+
+/**
+ * Extract the target file path from a violation message.
+ * Convention violations either start with a file path (POM/structural)
+ * or belong to the spec file (spec conventions).
+ */
+function extractTargetFile(violation: string, files: FileEntry[]): string {
+  // POM violations start with the file path: "pages/auth/AuthPage.ts: POM contains..."
+  const pathMatch = violation.match(/^([a-zA-Z0-9_\-/.]+\.(?:ts|js)):/);
+  if (pathMatch) return pathMatch[1];
+
+  // Structural violations reference a file: "tests/web/auth/auth.spec.ts: Uses..."
+  const structMatch = violation.match(/^([a-zA-Z0-9_\-/.]+\.spec\.ts):/);
+  if (structMatch) return structMatch[1];
+
+  // Spec convention violations (no path prefix) → target the spec file
+  const specFile = getSpecFile(files);
+  return specFile?.path ?? 'spec.ts';
+}
+
+/**
+ * Partition violations by target file path.
+ */
+function partitionViolationsByFile(violations: string[], files: FileEntry[]): FileFixTask[] {
+  const byPath = new Map<string, string[]>();
+  for (const v of violations) {
+    const targetPath = extractTargetFile(v, files);
+    const existing = byPath.get(targetPath) ?? [];
+    existing.push(v);
+    byPath.set(targetPath, existing);
+  }
+  return Array.from(byPath.entries()).map(([filePath, violations]) => ({ filePath, violations }));
+}
+
+/**
+ * Build the context files for a fix agent: the target file + the spec file.
+ */
+function buildContextForTask(task: FileFixTask, files: FileEntry[]): FileEntry[] {
+  const target = files.find((f) => f.path === task.filePath);
+  const spec = getSpecFile(files);
+  const context: FileEntry[] = [];
+  if (target) context.push(target);
+  if (spec && spec.path !== task.filePath) context.push(spec);
+  return context;
+}
+
+/**
+ * Run a batch of fix tasks with bounded concurrency.
+ * Each task fixes all its violations in one agent call.
+ * Failed tasks are caught and returned with success=false (partial success).
+ */
+async function runParallelFixRound(
+  tasks: FileFixTask[],
+  files: FileEntry[],
+  personaMap: PersonaMap,
+  concurrency: number,
+): Promise<FixAgentResult[]> {
+  const results: FixAgentResult[] = [];
+
+  // Bounded concurrency pool
+  const queue = [...tasks];
+  const inFlight: Promise<void>[] = [];
+
+  const runOne = async (task: FileFixTask) => {
+    const contextFiles = buildContextForTask(task, files);
+    const violationList = task.violations.join('\n\n');
+
+    try {
+      const { args, tokenUsage: fixUsage } = await runAgent(
+        `Fix ALL convention violations listed below. Rules:
+- Fix ONLY what is listed — do not change any other logic, test structure, or assertions
+- Each fix should be the minimal change needed
+- Do NOT "helpfully" fix violations in other files — those are handled by other agents
+- Output ONLY the files you changed in your done() call`,
+        `VIOLATIONS for ${task.filePath}:\n${violationList}\n\n${formatFilesForPrompt(contextFiles)}`,
+        fixFilesTools,
+        validateTypescriptHandler,
+        { maxIterations: 10 },
+      );
+
+      const changedFiles = (args.files as FileEntry[] | undefined) ?? [];
+      // Count remaining violations in the changed files
+      let remainingCount = 0;
+      for (const cf of changedFiles) {
+        if (cf.role === 'spec') {
+          remainingCount += checkSpecConventions(cf.content, personaMap).length;
+        } else if (cf.role === 'pom') {
+          remainingCount += checkPomConventions([cf], personaMap).length;
+        }
+      }
+
+      results.push({
+        filePath: task.filePath,
+        changedFiles,
+        tokenUsage: fixUsage,
+        remainingViolations: remainingCount,
+        success: true,
+      });
+    } catch (err) {
+      log('WARN', `[selfCorrection] Parallel fix agent failed for ${task.filePath}: ${(err as Error).message}`);
+      results.push({
+        filePath: task.filePath,
+        changedFiles: [],
+        tokenUsage: { promptTokens: 0, completionTokens: 0, totalTokens: 0, costUSD: 0 },
+        remainingViolations: task.violations.length,
+        success: false,
+      });
+    }
+  };
+
+  while (queue.length > 0 || inFlight.length > 0) {
+    while (queue.length > 0 && inFlight.length < concurrency) {
+      const task = queue.shift()!;
+      inFlight.push(runOne(task).then(() => {
+        const idx = inFlight.findIndex(p => p);
+        inFlight.splice(idx, 1);
+      }));
+    }
+    if (inFlight.length > 0) {
+      await Promise.race(inFlight);
+    }
+  }
+
+  return results;
+}
+
+/**
+ * Merge results from parallel fix agents.
+ * If two agents modify the same file, keep the one with fewer remaining violations.
+ */
+function mergeFixResults(base: FileEntry[], results: FixAgentResult[]): FileEntry[] {
+  const merged = [...base];
+  const fileModifications = new Map<string, FixAgentResult[]>();
+
+  // Group results by which files they modified
+  for (const result of results) {
+    if (!result.success || result.changedFiles.length === 0) continue;
+    for (const cf of result.changedFiles) {
+      const existing = fileModifications.get(cf.path) ?? [];
+      existing.push(result);
+      fileModifications.set(cf.path, existing);
+    }
+  }
+
+  // Apply modifications — resolve conflicts by keeping the agent with fewer remaining violations
+  for (const [filePath, modifications] of fileModifications) {
+    if (modifications.length === 1) {
+      // No conflict — apply directly
+      const changedFile = modifications[0].changedFiles.find((f) => f.path === filePath);
+      if (changedFile) {
+        const idx = merged.findIndex((f) => f.path === filePath);
+        if (idx !== -1) merged[idx] = changedFile;
+      }
+    } else {
+      // Conflict — pick the agent with the fewest remaining violations
+      const best = modifications.reduce((a, b) =>
+        a.remainingViolations <= b.remainingViolations ? a : b
+      );
+      log('WARN', `[selfCorrection] Merge conflict on ${filePath} — keeping fix from agent with ${best.remainingViolations} remaining violations`);
+      const changedFile = best.changedFiles.find((f) => f.path === filePath);
+      if (changedFile) {
+        const idx = merged.findIndex((f) => f.path === filePath);
+        if (idx !== -1) merged[idx] = changedFile;
+      }
+    }
+  }
+
+  return merged;
+}
+
 const fixFilesDoneTool: AgentTool = {
   type: 'function',
   function: {
@@ -370,9 +564,10 @@ export async function runWithSelfCorrection(
     // ignore
   }
 
-  // Step 2: Convention check — fix one violation at a time, re-check after each fix.
+  // Step 2: Convention check — fix violations in parallel by file, re-check after each round.
   const personaMap = await getPersonas(repoName, []);
   const MAX_CONVENTION_ROUNDS = maxAttempts;
+  const CONCURRENCY_LIMIT = 2;
 
   for (let round = 1; round <= MAX_CONVENTION_ROUNDS; round++) {
     const specFile = getSpecFile(files);
@@ -383,24 +578,29 @@ export async function runWithSelfCorrection(
 
     if (allViolations.length === 0) break;
 
-    const violation = allViolations[0];
-    log('WARN', `[selfCorrection] Convention violation (round ${round}/${MAX_CONVENTION_ROUNDS}): ${violation}`);
-    dashboardBus.emitEvent('correction', 'warn', `Convention violation (round ${round})`, { violation });
+    log('WARN', `[selfCorrection] Convention round ${round}/${MAX_CONVENTION_ROUNDS}: ${allViolations.length} violation(s) across files`);
+    dashboardBus.emitEvent('correction', 'warn', `Convention round ${round}`, { violations: allViolations.length });
 
-    const { args, tokenUsage: fixUsage } = await runAgent(
-      'Fix the single convention violation listed below. Fix ONLY what is listed — do not change any other logic.',
-      `VIOLATION:\n${violation}\n\n${formatFilesForPrompt(files)}`,
-      fixFilesTools,
-      validateTypescriptHandler,
-      { maxIterations: 10 },
-    );
+    // Partition violations by target file
+    const tasks = partitionViolationsByFile(allViolations, files);
+    log('INFO', `[selfCorrection] Partitioned into ${tasks.length} parallel fix task(s)`);
 
-    tokenUsage = addTokenUsage(tokenUsage, fixUsage);
-    const changedFiles = (args.files as FileEntry[] | undefined) ?? [];
-    files = mergeFiles(files, changedFiles);
+    // Run fix agents in parallel with bounded concurrency
+    const results = await runParallelFixRound(tasks, files, personaMap, CONCURRENCY_LIMIT);
 
-    log('INFO', `[selfCorrection] Convention fix applied (round ${round})`);
-    dashboardBus.emitEvent('correction', 'info', `Convention fix applied (round ${round})`, { tokenUsage: fixUsage });
+    // Merge results (partial success — failed agents are skipped)
+    const successfulResults = results.filter((r) => r.success && r.changedFiles.length > 0);
+    const failedCount = results.length - successfulResults.length;
+    const roundTokenUsage = results.reduce((acc, r) => addTokenUsage(acc, r.tokenUsage), { promptTokens: 0, completionTokens: 0, totalTokens: 0, costUSD: 0 });
+    tokenUsage = addTokenUsage(tokenUsage, roundTokenUsage);
+
+    files = mergeFixResults(files, results);
+
+    if (failedCount > 0) {
+      log('WARN', `[selfCorrection] ${failedCount} fix agent(s) failed in round ${round} — violations will be retried next round`);
+    }
+    log('INFO', `[selfCorrection] Convention round ${round} complete — ${successfulResults.length} agent(s) succeeded, $${roundTokenUsage.costUSD.toFixed(4)} USD`);
+    dashboardBus.emitEvent('correction', 'info', `Convention round ${round} complete`, { tokenUsage: roundTokenUsage, agentsSucceeded: successfulResults.length, agentsFailed: failedCount });
 
     if (round === MAX_CONVENTION_ROUNDS) {
       const remainingSpec = getSpecFile(files);
