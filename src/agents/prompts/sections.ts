@@ -187,6 +187,14 @@ export const SPEC_RULES = `## Spec writing rules
     // SKIPPED: "<name>" was not observed on <route> during exploration — <reason>
   });
 
+## Locator strategy — prefer exact strings over regex
+- Use exact string matchers whenever possible: getByRole('button', { name: 'Submit' })
+- Use regex ONLY for truly dynamic content that varies per persona or environment:
+  GOOD: getByRole('heading', { name: /Welcome back,/ }) — matches any persona's welcome heading
+  BAD: getByText(/Jane/) — persona name should come from personas object, not regex
+- Never use regex to avoid fixing a strict-mode violation — chain locators or use scoped selectors instead
+- URL patterns in toHaveURL() may use regex for path matching: toHaveURL(/\/dashboard/)
+
 ## Authentication in specs — NEVER use beforeEach login
 - Feature tests (anything outside the auth feature itself) MUST NOT use beforeEach to log in.
 - The fixtures file provides persona fixtures that deliver a pre-authenticated Page via storageState:

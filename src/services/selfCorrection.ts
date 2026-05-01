@@ -36,9 +36,37 @@ function getPomFiles(files: FileEntry[]): FileEntry[] {
   return files.filter((f) => f.role === 'pom');
 }
 
+/**
+ * Strip test descriptions from spec content before running convention checks.
+ * Removes the first string argument from test() and test.describe() calls
+ * so that persona names in test titles don't trigger false positives.
+ */
+function stripTestDescriptions(content: string): string {
+  return content
+    .replace(/test(?:\.describe)?\s*\(\s*`[^`]*`/g, 'test(`STRIPPED`')
+    .replace(/test(?:\.describe)?\s*\(\s*"[^"]*"/g, 'test("STRIPPED"')
+    .replace(/test(?:\.describe)?\s*\(\s*'[^']*'/g, "test('STRIPPED'");
+}
+
+/**
+ * Strip route path strings (URLs) from spec content before convention checks.
+ * Route paths like '/admin/dashboard' or '/appointments/book' contain persona
+ * role names as URL segments and should not trigger forbidden-string matches.
+ */
+function stripRoutePaths(content: string): string {
+  return content
+    .replace(/['"]\/\w+\/\w+[^'"]*['"]/g, '"STRIPPED_ROUTE"')
+    .replace(/['"]\/\w+['"]/g, '"STRIPPED_ROUTE"');
+}
+
 function checkSpecConventions(specContent: string, personaMap: PersonaMap): string[] {
   const violations: string[] = [];
   const forbiddenStrings = getForbiddenPersonaStrings(personaMap);
+
+  // Strip test descriptions and route paths before checking for forbidden strings.
+  // Test titles like 'BA-2: admin role is redirected...' and route patterns like
+  // '/admin/dashboard' should not trigger persona-data violations.
+  const checkableContent = stripRoutePaths(stripTestDescriptions(specContent));
 
   if (PAGE_GETBY_IN_SPEC_PATTERN.test(specContent)) {
     violations.push(
@@ -51,7 +79,7 @@ function checkSpecConventions(specContent: string, personaMap: PersonaMap): stri
   for (const str of forbiddenStrings) {
     const escaped = str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const regex = new RegExp(`(?<!personas\\.)\\b${escaped}\\b`, 'i');
-    if (regex.test(specContent)) {
+    if (regex.test(checkableContent)) {
       violations.push(
         `Spec contains hardcoded persona data ("${str}"). ` +
         'Assertions and locators must be persona-agnostic or use dynamic data from the imported `personas` object.'
