@@ -45,6 +45,14 @@ No HMAC signature validation — the server uses `express.json()`.
 - Spec path: `tests/web/{feature}/{ticketId}.spec.ts`
 - POM path: derived from `Page` class name inside POM content (`pomPathFromContent` in `src/agents/tools/outputTools.ts`)
 
+## Agent Output Format
+
+The QA agent outputs a unified `files[]` array with `role` metadata:
+- `role: "spec"` — test file (required, exactly 1)
+- `role: "pom"` — Page Object Model (required, at least 1)
+- `role: "fixture"` — fixtures/index.ts updates
+- `role: "extra"` — any other file (helpers, mock data, config)
+
 ## AI Service
 
 Uses OpenAI SDK-compatible API (`src/services/ai.ts`):
@@ -61,7 +69,12 @@ AI_MODEL=MiniMax-M2.7
 
 ## Self-Correction Loop
 
-`src/services/selfCorrection.ts` — `runWithSelfCorrection()` wraps the QA agent + TypeScript validation. Max attempts controlled by `MAX_SELF_CORRECTION_ATTEMPTS` env var (default 2). If all attempts fail, the spec is still committed with a warning in the Jira comment.
+`src/services/selfCorrection.ts` — `runWithSelfCorrection()` wraps the QA agent with a two-phase validation loop:
+
+1. **Phase 1 (Fast):** Convention checks (regex) + AST validation (`ts.createSourceFile`). Fix agent sees combined errors.
+2. **Phase 2 (Slow):** Full `tsc --noEmit` + `eslint` on a temp clone with generated files written in. Fix agent sees real compiler/linter errors.
+
+Max attempts per phase controlled by `MAX_SELF_CORRECTION_ATTEMPTS` env var (default 3). If all attempts fail, the spec is still committed with a warning.
 
 ## Crawler — PageSnapshot Format
 
@@ -72,7 +85,21 @@ AI_MODEL=MiniMax-M2.7
 
 ## Test Repo Access
 
-`src/services/testRepo.ts` reads from `klikagent-tests` repo via GitHub API. It also clones the repo locally (using `KLIKAGENT_TESTS_LOCAL_PATH=/opt/klikagent-tests` if set) for keyword map and context docs. Falls back gracefully if both fail.
+`src/services/localRepo.ts` maintains a local clone of the test repo for fast reads and discovery:
+- Clone location: `KLIKAGENT_TESTS_LOCAL_PATH` env var, or `./.klikagent-tests-cache/<repoName>/` as default
+- Auto-syncs every 5 minutes (`LOCAL_REPO_SYNC_INTERVAL_MS`)
+- Runs `npm ci` automatically if `node_modules` is missing
+
+All repo reads (Explorer context, Writer context, Review agent context, CI fix agent context) use the local clone.
+
+## Writer Agent Discovery Tools (Phase 1)
+
+The Writer Agent now has on-demand access to the test repo via three discovery tools:
+- `search_codebase(query, filePattern?, path?)` — grep search with 2-line context, 10-match cap
+- `get_file(path)` — read any file from the local clone
+- `list_directory(path)` — explore directory structure
+
+Context is still pre-fetched (fixtures, personas, golden examples), but the Writer can pull additional utilities and patterns on demand.
 
 ## What Was Removed
 

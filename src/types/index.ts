@@ -130,6 +130,14 @@ export interface PageSnapshot {
   }>;
 }
 
+// ─── Agent output ─────────────────────────────────────────────────────────────
+
+export interface FileEntry {
+  path: string;
+  content: string;
+  role: 'spec' | 'pom' | 'fixture' | 'extra';
+}
+
 // ─── Agent tool loop ──────────────────────────────────────────────────────────
 
 // A tool definition passed to the AI agent (OpenAI function calling format)

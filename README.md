@@ -299,8 +299,9 @@ src/
 │   ├── personas.ts             # Load personas from output repo config
 │   ├── repoProvisioner.ts      # Scaffold new test repos
 │   ├── selfCorrection.ts       # tsc + convention checks loop
-│   ├── testRepo.ts             # Read output repo via GitHub API
-│   ├── testRepoClone.ts        # Clone output repo for local keyword map
+│   ├── localRepo.ts            # Local clone of output repo (reads, search, sync)
+│   ├── codeValidation.ts       # tsc + eslint validation in temp clone
+│   ├── testRepoClone.ts        # MAX_SELF_CORRECTION_ATTEMPTS config
 │   └── writerContext.ts        # Pre-fetch writer context (fixtures, POMs, docs)
 ├── dashboard/
 │   ├── eventBus.ts             # SSE event bus

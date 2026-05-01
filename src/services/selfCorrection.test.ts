@@ -17,7 +17,7 @@ jest.mock('../agents/tools/outputTools', () => ({
   },
   validateTypescriptTool: {
     type: 'function',
-    function: { name: 'validate_typescript', description: 'Validate TS', parameters: { type: 'object', properties: { code: { type: 'string' } }, required: ['code'] } },
+    function: { name: 'validate_typescript', description: 'Validate TS', parameters: { type: 'object', properties: { code: { type: 'string' }, fileType: { type: 'string' } }, required: ['code'] } },
   },
   qaDoneTool: {
     type: 'function',
@@ -39,7 +39,9 @@ jest.mock('../agents/tools', () => ({
   qaTools: [],
   createQaHandlers: jest.fn().mockReturnValue({}),
   browserTools: [],
-  browserHandlers: {},
+  browserHandlers: {
+    browser_close: jest.fn().mockResolvedValue(undefined),
+  },
   reviewTools: [],
   createReviewHandlers: jest.fn().mockReturnValue({}),
 }));
@@ -74,10 +76,15 @@ const baseTask: QATask = {
   outputRepo: 'klikagent-tests',
 };
 
+const baseSpec = 'import { test } from "@playwright/test";\ntest("pass", async () => {});';
+const basePom = 'export class TestPage {}';
+
 const baseQaResult = {
   feature: 'test',
-  enrichedSpec: 'import { test } from "@playwright/test";\ntest("pass", async () => {});',
-  poms: [{ pomContent: 'export class TestPage {}', pomPath: 'pages/test/TestPage.ts' }],
+  files: [
+    { path: 'tests/web/test/42-test-feature.spec.ts', content: baseSpec, role: 'spec' },
+    { path: 'pages/test/TestPage.ts', content: basePom, role: 'pom' },
+  ],
   affectedPaths: 'tests/web/test/',
   tokenUsage: { promptTokens: 100, completionTokens: 50, totalTokens: 150, costUSD: 0.001 },
 };
@@ -88,8 +95,8 @@ const invalid = (msgs: string[]) => JSON.stringify({
   errors: msgs.map((m, i) => ({ line: i + 1, message: m })),
 });
 
-function makeFixResult(fixedSpec: string, tokens = { promptTokens: 20, completionTokens: 10, totalTokens: 30, costUSD: 0.0002 }) {
-  return { args: { fixedSpec }, tokenUsage: tokens };
+function makeFixResult(files: Array<{ path: string; content: string; role: string }>, tokens = { promptTokens: 20, completionTokens: 10, totalTokens: 30, costUSD: 0.0002 }) {
+  return { args: { files }, tokenUsage: tokens };
 }
 
 // ─── Tests ──────────────────────────────────────────────────────────────────
@@ -107,8 +114,9 @@ describe('runWithSelfCorrection', () => {
 
     expect(result.warned).toBe(false);
     expect(result.warningMessage).toBeUndefined();
-    expect(result.specContent).toBe(baseQaResult.enrichedSpec);
-    expect(result.poms[0].pomContent).toBe(baseQaResult.poms[0].pomContent);
+    expect(result.files).toHaveLength(2);
+    expect(result.files[0].content).toBe(baseSpec);
+    expect(result.files[1].content).toBe(basePom);
     expect(result.tokenUsage.totalTokens).toBe(150);
     expect(mockRunAgent).not.toHaveBeenCalled();
   });
@@ -118,12 +126,14 @@ describe('runWithSelfCorrection', () => {
     mockValidateTs
       .mockResolvedValueOnce(invalid(['Unexpected token']))
       .mockResolvedValueOnce(valid);
-    mockRunAgent.mockResolvedValue(makeFixResult(fixedSpec));
+    mockRunAgent.mockResolvedValue(makeFixResult([
+      { path: 'tests/web/test/42-test-feature.spec.ts', content: fixedSpec, role: 'spec' },
+    ]));
 
     const result = await runWithSelfCorrection(baseTask, 'qa/42-test');
 
     expect(result.warned).toBe(false);
-    expect(result.specContent).toBe(fixedSpec);
+    expect(result.files[0].content).toBe(fixedSpec);
     expect(mockRunAgent).toHaveBeenCalledTimes(1);
     expect(result.tokenUsage.totalTokens).toBe(150 + 30);
   });
@@ -131,7 +141,9 @@ describe('runWithSelfCorrection', () => {
   it('exhausts all tsc attempts — warned: true, warningMessage set', async () => {
     const fixedSpec = 'import { test } from "@playwright/test";\ntest("attempt", async () => {});';
     mockValidateTs.mockResolvedValue(invalid(['Persistent error']));
-    mockRunAgent.mockResolvedValue(makeFixResult(fixedSpec));
+    mockRunAgent.mockResolvedValue(makeFixResult([
+      { path: 'tests/web/test/42-test-feature.spec.ts', content: fixedSpec, role: 'spec' },
+    ]));
 
     const result = await runWithSelfCorrection(baseTask, 'qa/42-test');
 
@@ -144,13 +156,17 @@ describe('runWithSelfCorrection', () => {
 
   it('accumulates token usage across all correction rounds', async () => {
     const fixedSpec = 'import { test } from "@playwright/test";\ntest("fix2", async () => {});';
+    // validate_typescript is called for EACH .ts file per attempt (spec + pom = 2 files)
     mockValidateTs
-      .mockResolvedValueOnce(invalid(['error1']))
-      .mockResolvedValueOnce(invalid(['error2']))
-      .mockResolvedValueOnce(valid);
+      .mockResolvedValueOnce(invalid(['error1'])) // attempt 1, spec
+      .mockResolvedValueOnce(valid)               // attempt 1, pom
+      .mockResolvedValueOnce(invalid(['error2'])) // attempt 2, spec
+      .mockResolvedValueOnce(valid)               // attempt 2, pom
+      .mockResolvedValueOnce(valid)               // attempt 3, spec
+      .mockResolvedValueOnce(valid);              // attempt 3, pom
     mockRunAgent
-      .mockResolvedValueOnce(makeFixResult(fixedSpec, { promptTokens: 10, completionTokens: 5, totalTokens: 15, costUSD: 0.000125 }))
-      .mockResolvedValueOnce(makeFixResult(fixedSpec, { promptTokens: 20, completionTokens: 10, totalTokens: 30, costUSD: 0.00025 }));
+      .mockResolvedValueOnce(makeFixResult([{ path: 'tests/web/test/42-test-feature.spec.ts', content: fixedSpec, role: 'spec' }], { promptTokens: 10, completionTokens: 5, totalTokens: 15, costUSD: 0.000125 }))
+      .mockResolvedValueOnce(makeFixResult([{ path: 'tests/web/test/42-test-feature.spec.ts', content: fixedSpec, role: 'spec' }], { promptTokens: 20, completionTokens: 10, totalTokens: 30, costUSD: 0.00025 }));
 
     const result = await runWithSelfCorrection(baseTask, 'qa/42-test');
 
@@ -159,7 +175,6 @@ describe('runWithSelfCorrection', () => {
   });
 
   it('fixes violations one at a time — fix agent called once per violation round', async () => {
-    // Spec with two distinct invented persona properties
     const specWithTwoViolations =
       'import { test } from "../../../fixtures";\n' +
       'import { personas } from "../../../config/personas";\n' +
@@ -168,7 +183,6 @@ describe('runWithSelfCorrection', () => {
       '  await authPage.expectUrl(personas.patient.route);\n' +
       '});';
 
-    // After first fix: firstName gone, route still present
     const specAfterFirstFix =
       'import { test } from "../../../fixtures";\n' +
       'import { personas } from "../../../config/personas";\n' +
@@ -177,7 +191,6 @@ describe('runWithSelfCorrection', () => {
       '  await authPage.expectUrl(personas.patient.route);\n' +
       '});';
 
-    // After second fix: both gone
     const specFullyFixed =
       'import { test } from "../../../fixtures";\n' +
       'import { personas } from "../../../config/personas";\n' +
@@ -186,8 +199,6 @@ describe('runWithSelfCorrection', () => {
       '  await authPage.expectUrl(/\\/dashboard/);\n' +
       '});';
 
-    // Use a persona where key != role value to avoid triggering the forbidden-string check
-    // on `personas.user.firstName` (key "user" is not a forbidden string here)
     const personaMap = { user: { email: 'a@b.com', password: 'pw', displayName: 'Jane Doe', role: 'member' } };
     const { getPersonas } = await import('./personas');
     (getPersonas as jest.Mock).mockResolvedValue(personaMap);
@@ -195,20 +206,18 @@ describe('runWithSelfCorrection', () => {
     mockValidateTs.mockResolvedValue(valid);
     mockRunQaAgent.mockResolvedValueOnce({
       ...baseQaResult,
-      enrichedSpec: specWithTwoViolations.replace(/patient/g, 'user'),
+      files: [{ path: 'tests/web/test/42-test-feature.spec.ts', content: specWithTwoViolations.replace(/patient/g, 'user'), role: 'spec' }, baseQaResult.files[1]],
     });
     const specAfterFirstFixUser = specAfterFirstFix.replace(/patient/g, 'user');
     const specFullyFixedUser = specFullyFixed.replace(/patient/g, 'user');
-    // First round fixes firstName, second round fixes route
     mockRunAgent
-      .mockResolvedValueOnce(makeFixResult(specAfterFirstFixUser))
-      .mockResolvedValueOnce(makeFixResult(specFullyFixedUser));
+      .mockResolvedValueOnce(makeFixResult([{ path: 'tests/web/test/42-test-feature.spec.ts', content: specAfterFirstFixUser, role: 'spec' }]))
+      .mockResolvedValueOnce(makeFixResult([{ path: 'tests/web/test/42-test-feature.spec.ts', content: specFullyFixedUser, role: 'spec' }]));
 
     await runWithSelfCorrection(baseTask, 'qa/42-test');
 
     // Fix agent called exactly twice — once per violation
     expect(mockRunAgent).toHaveBeenCalledTimes(2);
-    // Each call receives a single violation
     expect(mockRunAgent).toHaveBeenNthCalledWith(1,
       expect.stringContaining('single convention violation'),
       expect.stringContaining('personas.user.firstName'),
@@ -226,12 +235,14 @@ describe('runWithSelfCorrection', () => {
     mockValidateTs
       .mockResolvedValueOnce(invalid(['Cannot find module']))
       .mockResolvedValueOnce(valid);
-    mockRunAgent.mockResolvedValue(makeFixResult(fixedSpec));
+    mockRunAgent.mockResolvedValue(makeFixResult([
+      { path: 'tests/web/test/42-test-feature.spec.ts', content: fixedSpec, role: 'spec' },
+    ]));
 
     await runWithSelfCorrection(baseTask, 'qa/42-test');
 
     expect(mockRunAgent).toHaveBeenCalledWith(
-      expect.stringContaining('TypeScript errors'),
+      expect.stringContaining('AST'),
       expect.stringContaining('Cannot find module'),
       expect.any(Array),
       expect.any(Object),

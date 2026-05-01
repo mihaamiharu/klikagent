@@ -4,6 +4,7 @@ import { QATask, TaskResult, ReviewContext, ProvisionRequest } from '../types';
 import { orchestrate } from '../orchestrator';
 import { runReviewAgent } from '../agents/reviewAgent';
 import { provisionRepo } from '../services/repoProvisioner';
+import { ensureRepo } from '../services/localRepo';
 import { commitFile, replyToReviewComment } from '../services/github';
 import { log } from '../utils/logger';
 import { dashboardRoutes } from '../dashboard/routes';
@@ -86,12 +87,12 @@ app.post('/reviews', (req: Request, res: Response) => {
   const featureMatch = ctx.specPath.match(/^tests\/web\/([^/]+)\//);
   const feature = featureMatch?.[1];
 
-  // Strip owner prefix from outputRepo — testRepo functions expect just the repo name
   const repoName = ctx.outputRepo.includes('/') ? ctx.outputRepo.split('/').pop()! : ctx.outputRepo;
 
   runStore.startRun(runId, ctx.ticketId, `Review PR #${ctx.prNumber}`, 'review');
   dashboardBus.withRunId(runId, async () => {
     try {
+      await ensureRepo(repoName);
       const result = await runReviewAgent(ctx, feature, repoName);
 
       // Commit fixed spec to branch — specPath is known from the trigger payload

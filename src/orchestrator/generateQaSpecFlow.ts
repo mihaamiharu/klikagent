@@ -1,6 +1,7 @@
 import { QATask, TaskResult } from '../types';
 import { log } from '../utils/logger';
 import { runWithSelfCorrection } from '../services/selfCorrection';
+import { ensureRepo } from '../services/localRepo';
 import {
   getDefaultBranchSha,
   createBranch,
@@ -13,6 +14,9 @@ import { dashboardBus } from '../dashboard/eventBus';
 export async function generateQaSpecFlow(task: QATask): Promise<void> {
   log('INFO', `[generateQaSpecFlow] Starting for task ${task.taskId}${task.feature ? ` feature-hint=${task.feature}` : ''}`);
 
+  // Phase 1: Ensure local clone is ready for fast reads and discovery tools
+  await ensureRepo(task.outputRepo);
+
   // Create QA branch in the output repo
   const branch = toBranchSlug(task.taskId, task.title);
   const baseSha = await getDefaultBranchSha(task.outputRepo);
@@ -21,35 +25,22 @@ export async function generateQaSpecFlow(task: QATask): Promise<void> {
   dashboardBus.emitEvent('github', 'info', `QA branch created: ${branch}`, { branch, baseSha });
 
   // Run self-correction loop (QA agent + tsc validation)
-  // The agent determines the feature from context; spec path is derived from its output
+  // The agent determines the feature from context; files are committed as-is
   const result = await runWithSelfCorrection(task, branch);
-  const { feature, specContent, poms, affectedPaths, fixtureUpdate, tokenUsage } = result;
+  const { feature, files, affectedPaths, tokenUsage } = result;
 
-  log('INFO', `[generateQaSpecFlow] Agent determined feature=${feature}`);
+  log('INFO', `[generateQaSpecFlow] Agent determined feature=${feature}, files=${files.length}`);
 
-  // Derive spec path from agent-determined feature
-  const specPath = `tests/web/${feature}/${toSpecFileName(task.title)}`;
-  log('INFO', `[generateQaSpecFlow] Spec path: ${specPath}`);
-
-  // Commit spec + POMs to branch
-  await commitFile(
-    task.outputRepo, branch, specPath, specContent,
-    `feat(spec): add #${task.taskId} spec [klikagent]`,
-  );
-  for (const { pomContent, pomPath } of poms) {
+  // Commit all generated files to branch
+  for (const file of files) {
     await commitFile(
-      task.outputRepo, branch, pomPath, pomContent,
-      `feat(pom): add ${feature} POM for #${task.taskId} [klikagent]`,
+      task.outputRepo,
+      branch,
+      file.path,
+      file.content,
+      `feat(${file.role}): ${file.path} for #${task.taskId} [klikagent]`,
     );
-  }
-  if (fixtureUpdate) {
-    await commitFile(
-      task.outputRepo, branch, 'fixtures/index.ts', fixtureUpdate,
-      `feat(fixtures): register ${feature} POM for #${task.taskId} [klikagent]`,
-    );
-    log('INFO', `[generateQaSpecFlow] Committed fixtures/index.ts`);
-  } else if (poms.length > 0) {
-    log('WARN', `[generateQaSpecFlow] ${poms.length} POM(s) committed but fixtureUpdate was not provided — fixtures/index.ts may be incomplete`);
+    log('INFO', `[generateQaSpecFlow] Committed ${file.path}`);
   }
 
   // Open draft PR in output repo
