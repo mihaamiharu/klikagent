@@ -59,14 +59,47 @@ function stripRoutePaths(content: string): string {
     .replace(/['"]\/\w+['"]/g, '"STRIPPED_ROUTE"');
 }
 
+/**
+ * Strip fixture parameter names from spec content before convention checks.
+ * Fixture names like `asPatient`, `asAdmin`, `asDoctor` are convention-compliant
+ * and should not trigger persona-data violations.
+ */
+function stripFixtureParameters(content: string): string {
+  return content
+    // Strip { asPatient }, { asAdmin }, { asDoctor } from test destructuring
+    .replace(/\bas(?:Patient|Doctor|Admin)\w*\b/g, 'FIXTURE_PARAM')
+    // Strip fixture names in goto calls: asPatient.goto(...)
+    .replace(/\bFIXTURE_PARAM\.goto\b/g, 'fixture.goto');
+}
+
+/**
+ * Strip URL regex patterns from spec content before convention checks.
+ * Patterns like /\/admin/, /\/dashboard/ contain role names as URL segments
+ * and should not trigger persona-data violations.
+ */
+function stripUrlRegexPatterns(content: string): string {
+  return content
+    // Strip regex URL patterns: /\/admin/, /\/appointments\/book/, etc.
+    .replace(/\/\\\/\w+[^/]*\//g, '/STRIPPED_URL_REGEX/')
+    // Strip string URL paths in toHaveURL assertions
+    .replace(/toHaveURL\s*\(\s*['"`][^'"`]*['"`]\s*\)/g, 'toHaveURL("STRIPPED")');
+}
+
 function checkSpecConventions(specContent: string, personaMap: PersonaMap): string[] {
   const violations: string[] = [];
   const forbiddenStrings = getForbiddenPersonaStrings(personaMap);
 
-  // Strip test descriptions and route paths before checking for forbidden strings.
-  // Test titles like 'BA-2: admin role is redirected...' and route patterns like
-  // '/admin/dashboard' should not trigger persona-data violations.
-  const checkableContent = stripRoutePaths(stripTestDescriptions(specContent));
+  // Strip test descriptions, route paths, fixture parameters, and URL regex patterns
+  // before checking for forbidden strings. Test titles like 'BA-2: admin role is redirected...',
+  // route patterns like '/admin/dashboard', fixture names like { asAdmin }, and URL
+  // regexes like /\/admin/ should not trigger persona-data violations.
+  const checkableContent = stripUrlRegexPatterns(
+    stripRoutePaths(
+      stripTestDescriptions(
+        stripFixtureParameters(specContent)
+      )
+    )
+  );
 
   if (PAGE_GETBY_IN_SPEC_PATTERN.test(specContent)) {
     violations.push(

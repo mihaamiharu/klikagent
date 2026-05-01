@@ -43,7 +43,7 @@ export const CONTEXT_SEQUENCE = `## Required steps — context gathering
 Next: call browser_navigate to begin exploration.`;
 
 export const EXPLORATION_SEQUENCE = `## Required steps — exploration
-6. Call browser_navigate(url, persona) to open the starting URL — auto-loads saved auth state if available
+6. Call browser_navigate(url, persona) to open the starting URL — auto-loads saved auth state if available. To switch persona mid-session, just call browser_navigate with a different persona — the browser state switches automatically.
 7. Check the snapshot URL: if NOT /login, you're already authenticated — proceed to exploration
    If on /login, log in manually then call browser_command(["state-save", ".playwright-auth/{persona}.json"])
 8. Interact using element refs from the snapshot: browser_click("e15"), browser_fill("e5", "value")
@@ -72,9 +72,13 @@ Browser tools control a persistent headless browser session via playwright-cli. 
 - "snapshot": YAML accessibility tree with element refs (e1, e2, e15, ...)
 - "generatedCode": the exact Playwright TypeScript code emitted by the last fill/click action — collect these for your report
 
-## Auth state reuse
-Pass the persona name to browser_navigate — saved auth state is loaded automatically if it exists:
+## Auth state reuse and persona switching
+Pass the persona name to browser_navigate — saved auth state is loaded automatically:
   browser_navigate(url, persona="patient")   ← pre-authenticated if state file exists
+  browser_navigate(url, persona="admin")     ← automatically switches to admin auth state
+
+The browser automatically switches auth state when you change persona between navigate calls.
+No manual logout/login is needed — just call browser_navigate with the new persona.
 
 After a successful manual login, always save state so future tasks skip login:
   browser_command(["state-save", ".playwright-auth/{persona}.json"])
@@ -178,9 +182,13 @@ export const SPEC_RULES = `## Spec writing rules
   - Use authPage.login(email, password) NOT a chain of fill() + click() calls
   - Use authPage.expectLoginSuccess(displayName, role) NOT a manual expect block
 - CRITICAL — Strict mode: Ensure locators are strictly scoped. If a locator matches multiple elements, you MUST chain locators to ensure uniqueness.
-- NEVER hardcode persona display names (e.g. "Jane Doe", "Jane") or roles in your specs or POMs. Use properties from the imported \`personas\` object. If the ExplorationReport notes show dynamic content (e.g. "welcome heading shows user's display name"), create a parameterized POM method:
+- NEVER hardcode persona display names (e.g. "Jane Doe", "Jane") or roles in LOCATORS or ASSERTIONS.
+  Test descriptions (the first argument to test()) should be static, human-readable strings — do NOT use template literals with personas.X.
+  Use properties from the imported \`personas\` object for dynamic UI text matching:
   BAD:  this.userName = page.getByText('Jane Doe');
   GOOD: async expectUserProfile(name: string, role: string) { await expect(this.page.getByRole('complementary').getByText(name)).toBeVisible(); }
+- The \`personas\` object is for: login credentials, display names in assertions, role-based UI text
+- The \`personas\` object is NOT for: test names, fixture parameters, URL paths
 - If you define a method in your POM (e.g. login(), expectOnLoginPage()), you MUST call it in your tests. Unused POM methods are a sign the POM was not properly integrated.
 - For each missingLocator in the ExplorationReport, emit a test.skip with the reason:
   test.skip('Test title matching the missing scenario', async () => {
