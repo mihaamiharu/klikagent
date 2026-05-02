@@ -269,7 +269,7 @@ npm run dev
 | `GH_INSTALLATION_ID` | Installation ID for token exchange |
 | `GITHUB_TOKEN` | Optional PAT — fallback for `localRepo` clone if App vars missing |
 | `GITHUB_OWNER` | GitHub org/user that owns the output repo |
-| `GITHUB_MAIN_REPO` | Default output repo (e.g. `klikagent-demo-tests`) |
+| `GH_MAIN_REPO` | Default output repo (e.g. `klikagent-demo-tests`) |
 | `KLIKAGENT_TESTS_LOCAL_PATH` | Local clone root (default: `./.klikagent-tests-cache`) |
 | `LOCAL_REPO_SYNC_INTERVAL_MS` | Local repo sync interval in ms (default: 300000 = 5 min) |
 | `AI_API_KEY` | API key for the AI provider |

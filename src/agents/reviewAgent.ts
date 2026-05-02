@@ -77,10 +77,18 @@ export async function runReviewAgent(
     createReviewHandlers(repoName),
     { maxIterations: 20 },
   );
+  const rawReplies = args.commentReplies;
+  const commentReplies: Array<{ commentId: number; body: string }> =
+    typeof rawReplies === 'string' ? JSON.parse(rawReplies) : (rawReplies as Array<{ commentId: number; body: string }>) ?? [];
+
+  const rawFiles = args.files;
+  const files: Array<{ path: string; content: string }> =
+    typeof rawFiles === 'string' ? JSON.parse(rawFiles) : (rawFiles as Array<{ path: string; content: string }>) ?? [];
+
   return {
     fixedSpec: args.fixedSpec as string,
-    files: (args.files as Array<{ path: string; content: string }>) ?? [],
-    commentReplies: args.commentReplies as Array<{ commentId: number; body: string }>,
+    files,
+    commentReplies,
     tokenUsage,
   };
 }
