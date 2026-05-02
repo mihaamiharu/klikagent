@@ -150,8 +150,9 @@ describe('runWithSelfCorrection', () => {
     expect(result.warned).toBe(true);
     expect(result.warningMessage).toContain('Persistent error');
     expect(result.warningMessage).toContain('3');
-    // attempts: 1 fail → fix, 2 fail → fix, 3 fail → final check → warned
-    expect(mockRunAgent).toHaveBeenCalledTimes(2);
+    // 2 files fail (spec + pom) → 2 parallel agents per attempt × 2 attempts before exhaustion = 4 calls
+    // (attempt 3 short-circuits before invoking the agents)
+    expect(mockRunAgent).toHaveBeenCalledTimes(4);
   });
 
   it('accumulates token usage across all correction rounds', async () => {
@@ -216,16 +217,16 @@ describe('runWithSelfCorrection', () => {
 
     await runWithSelfCorrection(baseTask, 'qa/42-test');
 
-    // Fix agent called twice — first round sends both violations together (parallel by file),
-    // second round handles the remaining violation after re-check.
+    // Fix agent called twice — first attempt sends both violations together (parallel by file),
+    // second attempt handles the remaining violation after re-check.
     expect(mockRunAgent).toHaveBeenCalledTimes(2);
     expect(mockRunAgent).toHaveBeenNthCalledWith(1,
-      expect.stringContaining('Fix ALL convention violations'),
+      expect.stringContaining('Fix ALL violations'),
       expect.stringContaining('personas.user.firstName'),
       expect.any(Array), expect.any(Object), expect.any(Object),
     );
     expect(mockRunAgent).toHaveBeenNthCalledWith(2,
-      expect.stringContaining('Fix ALL convention violations'),
+      expect.stringContaining('Fix ALL violations'),
       expect.stringContaining('personas.user.route'),
       expect.any(Array), expect.any(Object), expect.any(Object),
     );

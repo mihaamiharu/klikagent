@@ -410,12 +410,12 @@ async function runParallelFixRound(
 
     try {
       const { args, tokenUsage: fixUsage } = await runAgent(
-        `Fix ALL convention violations listed below. Rules:
+        `Fix ALL violations listed below (convention and/or TypeScript/AST). Rules:
 - Fix ONLY what is listed — do not change any other logic, test structure, or assertions
 - Each fix should be the minimal change needed
 - Do NOT "helpfully" fix violations in other files — those are handled by other agents
 - Output ONLY the files you changed in your done() call`,
-        `VIOLATIONS for ${task.filePath}:\n${violationList}\n\n${formatFilesForPrompt(contextFiles)}`,
+        `ERRORS for ${task.filePath}:\n${violationList}\n\n${formatFilesForPrompt(contextFiles)}`,
         fixFilesTools,
         validateTypescriptHandler,
         { maxIterations: 10 },
@@ -559,6 +559,28 @@ function addTokenUsage(acc: TokenUsage, next: TokenUsage): TokenUsage {
 // Convention and TS fix agents only need validate_typescript + their done() — no browser tools.
 const fixFilesTools: AgentTool[] = [validateTypescriptTool, fixFilesDoneTool];
 
+/**
+ * Run the in-memory TypeScript AST validator against every .ts file and
+ * return any errors. Used by Phase 1 of self-correction.
+ */
+async function collectAstErrors(files: FileEntry[]): Promise<Array<{ path: string; line: number; message: string }>> {
+  const errors: Array<{ path: string; line: number; message: string }> = [];
+  for (const file of files.filter((f) => f.path.endsWith('.ts'))) {
+    const fileType: 'spec' | 'pom' | 'generic' =
+      file.role === 'spec' ? 'spec' : file.role === 'pom' ? 'pom' : 'generic';
+    const tsResultRaw = await validateTypescriptHandler.validate_typescript({ code: file.content, fileType });
+    const tsResult = JSON.parse(
+      typeof tsResultRaw === 'string' ? tsResultRaw : JSON.stringify(tsResultRaw)
+    ) as { valid: boolean; errors: Array<{ line: number; message: string }> };
+    if (!tsResult.valid) {
+      for (const err of tsResult.errors) {
+        errors.push({ path: file.path, line: err.line, message: err.message });
+      }
+    }
+  }
+  return errors;
+}
+
 // CI fix agent DOES need browser tools — it navigates to verify actual vs expected values.
 const ciFixTools: AgentTool[] = [...qaTools.filter((t) => t.function.name !== 'done'), fixFilesDoneTool];
 
@@ -584,78 +606,14 @@ export async function runWithSelfCorrection(
     // ignore
   }
 
-  // Step 2: Convention check — fix violations in parallel by file, re-check after each round.
+  // ─── Phase 1: Fast validation (convention + AST + structural) ───────────────
+  // Combined loop: each attempt re-checks all fast signals, partitions errors by
+  // target file, and fans out parallel fix agents (one per file). Replaces the
+  // earlier convention-only + AST-only loops which duplicated this work.
   const personaMap = await getPersonas(repoName, []);
-  const MAX_CONVENTION_ROUNDS = maxAttempts;
   const CONCURRENCY_LIMIT = 2;
+  let astErrors: Array<{ path: string; line: number; message: string }> = await collectAstErrors(files);
 
-  for (let round = 1; round <= MAX_CONVENTION_ROUNDS; round++) {
-    const specFile = getSpecFile(files);
-    const pomFiles = getPomFiles(files);
-    const specViolations = specFile ? checkSpecConventions(specFile.content, personaMap) : [];
-    const pomViolations = checkPomConventions(pomFiles, personaMap);
-    const allViolations = [...specViolations, ...pomViolations];
-
-    if (allViolations.length === 0) break;
-
-    log('WARN', `[selfCorrection] Convention round ${round}/${MAX_CONVENTION_ROUNDS}: ${allViolations.length} violation(s) across files`);
-    dashboardBus.emitEvent('correction', 'warn', `Convention round ${round}`, { violations: allViolations.length });
-
-    // Partition violations by target file
-    const tasks = partitionViolationsByFile(allViolations, files);
-    log('INFO', `[selfCorrection] Partitioned into ${tasks.length} parallel fix task(s)`);
-
-    // Run fix agents in parallel with bounded concurrency
-    const results = await runParallelFixRound(tasks, files, personaMap, CONCURRENCY_LIMIT);
-
-    // Merge results (partial success — failed agents are skipped)
-    const successfulResults = results.filter((r) => r.success && r.changedFiles.length > 0);
-    const failedCount = results.length - successfulResults.length;
-    const roundTokenUsage = results.reduce((acc, r) => addTokenUsage(acc, r.tokenUsage), { promptTokens: 0, completionTokens: 0, totalTokens: 0, costUSD: 0 });
-    tokenUsage = addTokenUsage(tokenUsage, roundTokenUsage);
-
-    files = mergeFixResults(files, results);
-
-    if (failedCount > 0) {
-      log('WARN', `[selfCorrection] ${failedCount} fix agent(s) failed in round ${round} — violations will be retried next round`);
-    }
-    log('INFO', `[selfCorrection] Convention round ${round} complete — ${successfulResults.length} agent(s) succeeded, $${roundTokenUsage.costUSD.toFixed(4)} USD`);
-    dashboardBus.emitEvent('correction', 'info', `Convention round ${round} complete`, { tokenUsage: roundTokenUsage, agentsSucceeded: successfulResults.length, agentsFailed: failedCount });
-
-    if (round === MAX_CONVENTION_ROUNDS) {
-      const remainingSpec = getSpecFile(files);
-      const remainingPoms = getPomFiles(files);
-      const remaining = [
-        ...(remainingSpec ? checkSpecConventions(remainingSpec.content, personaMap) : []),
-        ...checkPomConventions(remainingPoms, personaMap),
-      ];
-      if (remaining.length > 0) {
-        log('WARN', `[selfCorrection] ${remaining.length} convention violation(s) remain after ${MAX_CONVENTION_ROUNDS} rounds: ${remaining.join('; ')}`);
-        dashboardBus.emitEvent('correction', 'warn', 'Convention violations remain after max rounds', { violations: remaining });
-      }
-    }
-  }
-
-  // ─── Phase 1: Fast validation (convention + AST) ────────────────────────────
-  // Already done above. Now run AST validation on all .ts files.
-  // If AST errors exist, combine with any remaining convention errors and fix together.
-  const tsFiles = files.filter((f) => f.path.endsWith('.ts'));
-  let astErrors: Array<{ path: string; line: number; message: string }> = [];
-  for (const file of tsFiles) {
-    const fileType: 'spec' | 'pom' | 'generic' =
-      file.role === 'spec' ? 'spec' : file.role === 'pom' ? 'pom' : 'generic';
-    const tsResultRaw = await validateTypescriptHandler.validate_typescript({ code: file.content, fileType });
-    const tsResult = JSON.parse(
-      typeof tsResultRaw === 'string' ? tsResultRaw : JSON.stringify(tsResultRaw)
-    ) as { valid: boolean; errors: Array<{ line: number; message: string }> };
-    if (!tsResult.valid) {
-      for (const err of tsResult.errors) {
-        astErrors.push({ path: file.path, line: err.line, message: err.message });
-      }
-    }
-  }
-
-  // Fix AST errors (if any) together with any lingering convention issues
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     const specFile = getSpecFile(files);
     const pomFiles = getPomFiles(files);
@@ -670,51 +628,40 @@ export async function runWithSelfCorrection(
       break;
     }
 
-    const combinedErrors = [
-      ...conventionErrors.map((m) => `CONVENTION: ${m}`),
-      ...astErrors.map((e) => `AST: ${e.path}(${e.line}): ${e.message}`),
-    ].join('\n');
+    // Combine into a single violation list, then partition by target file.
+    // AST errors are formatted with the path prefix so extractTargetFile picks them up.
+    const allErrors = [
+      ...conventionErrors,
+      ...astErrors.map((e) => `${e.path}: AST line ${e.line}: ${e.message}`),
+    ];
 
-    log('WARN', `[selfCorrection] Phase 1 errors on attempt ${attempt}/${maxAttempts}`);
-    dashboardBus.emitEvent('validation', 'warn', 'Phase 1 errors found', { errors: combinedErrors });
+    log('WARN', `[selfCorrection] Phase 1 attempt ${attempt}/${maxAttempts}: ${allErrors.length} error(s) (${conventionErrors.length} convention, ${astErrors.length} AST)`);
+    dashboardBus.emitEvent('validation', 'warn', `Phase 1 attempt ${attempt}`, { conventions: conventionErrors.length, ast: astErrors.length });
 
     if (attempt === maxAttempts) {
       log('WARN', `[selfCorrection] Phase 1 exhausted after ${maxAttempts} attempts`);
       break;
     }
 
-    const { args, tokenUsage: fixUsage } = await runAgent(
-      `Fix the errors listed below. Rules:
-- Fix ONLY what is listed — do not change any other logic
-- For convention errors: apply the suggested fix pattern
-- For AST errors: fix the TypeScript syntax/type issue
-- Output ONLY the changed files in your done() call`,
-      `ERRORS:\n${combinedErrors}\n\n${formatFilesForPrompt(files)}`,
-      fixFilesTools,
-      validateTypescriptHandler,
-      { maxIterations: 10 },
-    );
-    tokenUsage = addTokenUsage(tokenUsage, fixUsage);
-    const changedFiles = (args.files as FileEntry[] | undefined) ?? [];
-    files = mergeFiles(files, changedFiles);
-    log('INFO', `[selfCorrection] Applied Phase 1 correction ${attempt}`);
-    dashboardBus.emitEvent('correction', 'info', `Applied Phase 1 correction ${attempt}`, { tokenUsage: fixUsage });
+    const tasks = partitionViolationsByFile(allErrors, files);
+    log('INFO', `[selfCorrection] Partitioned into ${tasks.length} parallel fix task(s)`);
 
-    // Re-run AST validation after fix
-    astErrors = [];
-    for (const file of files.filter((f) => f.path.endsWith('.ts'))) {
-      const fileType: 'spec' | 'pom' | 'generic' =
-        file.role === 'spec' ? 'spec' : file.role === 'pom' ? 'pom' : 'generic';
-      const tsResultRaw = await validateTypescriptHandler.validate_typescript({ code: file.content, fileType });
-      const tsResult = JSON.parse(
-        typeof tsResultRaw === 'string' ? tsResultRaw : JSON.stringify(tsResultRaw)
-      ) as { valid: boolean; errors: Array<{ line: number; message: string }> };
-      if (!tsResult.valid) {
-        for (const err of tsResult.errors) {
-          astErrors.push({ path: file.path, line: err.line, message: err.message });
-        }
-      }
+    const results = await runParallelFixRound(tasks, files, personaMap, CONCURRENCY_LIMIT);
+    const successfulResults = results.filter((r) => r.success && r.changedFiles.length > 0);
+    const failedCount = results.length - successfulResults.length;
+    const roundTokenUsage = results.reduce((acc, r) => addTokenUsage(acc, r.tokenUsage), { promptTokens: 0, completionTokens: 0, totalTokens: 0, costUSD: 0 });
+    tokenUsage = addTokenUsage(tokenUsage, roundTokenUsage);
+
+    files = mergeFixResults(files, results);
+
+    if (failedCount > 0) {
+      log('WARN', `[selfCorrection] ${failedCount} fix agent(s) failed in attempt ${attempt} — errors will be retried next attempt`);
     }
+    log('INFO', `[selfCorrection] Phase 1 attempt ${attempt} complete — ${successfulResults.length} agent(s) succeeded, $${roundTokenUsage.costUSD.toFixed(4)} USD`);
+    dashboardBus.emitEvent('correction', 'info', `Applied Phase 1 correction ${attempt}`, { tokenUsage: roundTokenUsage, agentsSucceeded: successfulResults.length, agentsFailed: failedCount });
+
+    // Re-run AST validation against the merged file set.
+    astErrors = await collectAstErrors(files);
   }
 
   // ─── Phase 2: Slow validation (tsc + eslint) ────────────────────────────────
