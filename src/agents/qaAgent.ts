@@ -10,10 +10,8 @@ export async function runQaAgent(
   repoName: string,
 ): Promise<{
   feature: string;
-  enrichedSpec: string;
-  poms: Array<{ pomContent: string; pomPath: string }>;
+  files: Array<{ path: string; content: string; role: string }>;
   affectedPaths: string;
-  fixtureUpdate?: string;
   tokenUsage: TokenUsage;
 }> {
   // Step 1: Explore + base context fetch run in parallel.
@@ -28,15 +26,13 @@ export async function runQaAgent(
   const ctx = await resolveWriterContext(repoName, report.feature, baseCtx);
 
   // Step 3: Write — fresh-context agent generates spec + POM from the report, no browser access.
-  const { feature, enrichedSpec, poms, affectedPaths, fixtureUpdate, tokenUsage: writerUsage } =
+  const { feature, files, affectedPaths, tokenUsage: writerUsage } =
     await runWriterAgent(task, branch, report, ctx);
 
   return {
     feature,
-    enrichedSpec,
-    poms,
+    files,
     affectedPaths,
-    fixtureUpdate,
     tokenUsage: {
       promptTokens:     explorerUsage.promptTokens     + writerUsage.promptTokens,
       completionTokens: explorerUsage.completionTokens + writerUsage.completionTokens,

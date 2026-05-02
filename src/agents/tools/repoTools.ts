@@ -1,5 +1,5 @@
 import { AgentTool, ToolHandlers } from '../../types';
-import * as testRepo from '../../services/testRepo';
+import * as localRepo from '../../services/localRepo';
 
 // ─── Repo read tools (feature-independent, safe for all agents) ───────────────
 // Fixtures, personas, context docs, POMs list, config files.
@@ -9,7 +9,7 @@ export const repoReadToolDefs: AgentTool[] = [
     type: 'function',
     function: {
       name: 'get_personas',
-      description: 'Get config/personas.ts — typed credential objects for all test personas (admin, doctor, patient). Use these in specs instead of hardcoding email/password strings.',
+      description: 'Get config/personas.ts — typed credential objects for all test personas. Response includes the raw file plus a Persona Schema Summary listing all valid persona keys and properties. Use ONLY the keys and properties listed in the schema — NEVER invent personas.X or personas.X.Y that are not in the summary. For deliberately-invalid credentials, use string literals like \'nonexistent@example.com\' instead of inventing a persona key.',
       parameters: { type: 'object', properties: {}, required: [] },
     },
   },
@@ -158,33 +158,33 @@ export const repoToolDefs: AgentTool[] = [...repoReadToolDefs, ...specReadToolDe
 
 export function createRepoToolHandlers(repoName: string): ToolHandlers {
   return {
-    get_personas: async () => await testRepo.getPersonas(repoName),
-    get_route_map: async () => JSON.stringify(await testRepo.getRouteMap(repoName)),
+    get_personas: async () => await localRepo.getPersonas(repoName),
+    get_route_map: async () => JSON.stringify(await localRepo.getRouteMap(repoName)),
     get_context_docs: async () => {
-      const docs = await testRepo.getContextDocs(repoName);
+      const docs = await localRepo.getContextDocs(repoName);
       return Object.entries(docs).map(([file, content]) => `## ${file}\n${content}`).join('\n\n');
     },
-    get_fixtures: async () => await testRepo.getFixtures(repoName),
+    get_fixtures: async () => await localRepo.getFixtures(repoName),
     get_helpers: async () => {
-      const helpers = await testRepo.getHelpers(repoName);
+      const helpers = await localRepo.getHelpers(repoName);
       return Object.values(helpers).join('\n\n');
     },
-    get_existing_pom: async (args) => await testRepo.getExistingPOM(repoName, args.feature as string) ?? '(no POM found)',
+    get_existing_pom: async (args) => await localRepo.getExistingPOM(repoName, args.feature as string) ?? '(no POM found)',
     get_existing_tests: async (args) => {
-      const tests = await testRepo.getExistingTests(repoName, args.feature as string);
+      const tests = await localRepo.getExistingTests(repoName, args.feature as string);
       return Object.entries(tests).map(([f, c]) => `## ${f}\n${c}`).join('\n\n') || '(no existing tests)';
     },
     get_skeleton_spec: async (args) =>
-      await testRepo.getCurrentSpec(repoName, args.branch as string, args.ticketId as string, args.feature as string) ?? '(no skeleton found)',
+      await localRepo.getCurrentSpecOnBranch(repoName, args.branch as string, args.ticketId as string, args.feature as string) ?? '(no skeleton found)',
     get_current_pom: async (args) =>
-      await testRepo.getCurrentPOM(repoName, args.branch as string, args.feature as string) ?? '(no POM on branch)',
+      await localRepo.getCurrentPOMOnBranch(repoName, args.branch as string, args.feature as string) ?? '(no POM on branch)',
     get_parent_spec: async (args) =>
-      await testRepo.getParentSpec(repoName, args.branch as string, args.parentTicketId as string, args.feature as string) ?? '(no parent spec found)',
+      await localRepo.getCurrentSpecOnBranch(repoName, args.branch as string, args.parentTicketId as string, args.feature as string) ?? '(no parent spec found)',
     list_available_poms: async () => {
-      const poms = await testRepo.listAllPOMs(repoName);
+      const poms = await localRepo.listAllPoms(repoName);
       return poms.length > 0 ? poms.join('\n') : '(no POM files found)';
     },
-    get_tsconfig: async () => await testRepo.getTsConfig(repoName),
-    get_playwright_config: async () => await testRepo.getPlaywrightConfig(repoName),
+    get_tsconfig: async () => await localRepo.getTsConfig(repoName),
+    get_playwright_config: async () => await localRepo.getPlaywrightConfig(repoName),
   };
 }

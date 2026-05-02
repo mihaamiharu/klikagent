@@ -155,5 +155,65 @@ export class BookAppointmentPage {
     return this.sidebarLink.getAttribute('href');
   }
 }
+\`\`
+
+## Golden Pattern 8 — Select dropdowns (always use { label: } or { value: })
+
+\`\`\`typescript
+// POM — selectOption requires an object, never a raw string
+async selectDepartment(department: string): Promise<void> {
+  await this.departmentSelect.selectOption({ label: department });
+}
+
+// BAD — raw string will fail if option value differs from visible label
+await this.departmentSelect.selectOption('Cardiology');
+
+// GOOD — use label for visible text, value for the underlying option value
+await this.departmentSelect.selectOption({ label: 'Cardiology' });
+await this.departmentSelect.selectOption({ value: 'cardiology' });
+\`\`
+
+## Golden Pattern 9 — Multiple POMs via fixtures
+
+When a test needs multiple POMs, register them as fixtures in fixtures/index.ts
+instead of constructing each one inline. This keeps tests clean and reusable.
+
+\`\`\`typescript
+// fixtures/index.ts — register multiple POMs as fixtures
+import { test as base, Page } from '@playwright/test';
+import { AuthPage } from '../pages/auth/AuthPage';
+import { DoctorsPage } from '../pages/doctors/DoctorsPage';
+import { DepartmentsPage } from '../pages/departments/DepartmentsPage';
+
+type Fixtures = {
+  authPage: AuthPage;
+  doctorsPage: DoctorsPage;
+  departmentsPage: DepartmentsPage;
+  asPatient: Page;
+  asDoctor: Page;
+  asAdmin: Page;
+};
+
+export const test = base.extend<Fixtures>({
+  authPage: async ({ page }, use) => { await use(new AuthPage(page)); },
+  doctorsPage: async ({ asAdmin }, use) => { await use(new DoctorsPage(asAdmin)); },
+  departmentsPage: async ({ asAdmin }, use) => { await use(new DepartmentsPage(asAdmin)); },
+  // ... persona fixtures ...
+});
+
+// Spec — receive multiple POMs as fixture parameters
+test.describe('Doctors | Admin Flow', { tag: ['@doctors', '@regression'] }, () => {
+  test('admin creates doctor and verifies in departments', async ({ asAdmin, doctorsPage, departmentsPage }) => {
+    // ✅ doctorsPage and departmentsPage are already authenticated as Admin
+    await doctorsPage.goto();
+    await doctorsPage.clickCreateDoctorButton();
+    await doctorsPage.fillDoctorForm({ firstName: 'Test', lastName: 'Dr', email: 'test@test.com', password: 'Pass123!', department: 'General', specialization: 'GP', license: 'LIC123' });
+    await doctorsPage.submitDoctorForm();
+    await doctorsPage.expectDoctorInList('Test', 'Dr');
+
+    await departmentsPage.goto();
+    await departmentsPage.expectDepartmentInList('General');
+  });
+});
 \`\``;
 }

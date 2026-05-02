@@ -42,6 +42,8 @@ export function authStateExists(persona: string, baseUrl?: string): boolean {
 
 // Track active sessions by their runId to prevent state pollution in parallel runs.
 const activeSessions = new Set<string>();
+// Track which persona is loaded in each session so we can auto-switch state mid-session.
+const sessionPersona = new Map<string, string>();
 
 function getSessionId(): string {
   const runId = dashboardBus.getRunId();
@@ -121,16 +123,23 @@ async function handleNavigate(args: Record<string, unknown>): Promise<string> {
         return JSON.stringify({ error: 'BROWSER_ERROR', message: `Failed to open browser session: ${openResult}` });
       }
       activeSessions.add(sessionId);
+    }
 
-      // Auto-load saved auth state for the persona, if available
-      if (persona) {
-        const stateFile = authStatePath(persona, baseUrl);
+    // Persona switching: load state whenever a different persona is requested.
+    if (persona) {
+      const stateFile = authStatePath(persona, baseUrl);
+      const currentPersona = sessionPersona.get(sessionId);
+      if (persona !== currentPersona) {
         if (fs.existsSync(stateFile)) {
-          log('INFO', `[BrowserTools] Loading saved auth state for "${persona}" from ${stateFile}`);
-          await cli('state-load', stateFile);
+          log('INFO', `[BrowserTools] Switching persona from "${currentPersona ?? 'none'}" to "${persona}" — loading auth state`);
+          const loadResult = await cli('state-load', stateFile);
+          if (loadResult.includes('Error') || loadResult.includes('ENOENT')) {
+            log('WARN', `[BrowserTools] Failed to load auth state for "${persona}": ${loadResult}`);
+          }
         } else {
           log('INFO', `[BrowserTools] No saved auth state for "${persona}" — agent will log in manually`);
         }
+        sessionPersona.set(sessionId, persona);
       }
     }
 
@@ -242,6 +251,7 @@ async function handleClose(_args: Record<string, unknown>): Promise<string> {
     // ignore
   }
   activeSessions.delete(sessionId);
+  sessionPersona.delete(sessionId);
   return JSON.stringify({ ok: true });
 }
 
@@ -257,7 +267,7 @@ export function buildBrowserTools(): AgentTool[] {
         description:
           'Open the browser and navigate to a URL. Returns a YAML accessibility snapshot with element refs (e1, e2, ...) and the current page URL. ' +
           'Must be called before any other browser tool. On first call, opens a new browser session. ' +
-          'Pass "persona" (e.g. "patient", "doctor", "admin") to auto-load saved auth state — if a state file exists for that persona the browser will already be authenticated and the app will skip the login page.',
+          'Pass "persona" (e.g. "patient", "doctor", "admin") to load saved auth state — automatically switches state when persona changes mid-session.',
         parameters: {
           type: 'object',
           properties: {
@@ -268,10 +278,10 @@ export function buildBrowserTools(): AgentTool[] {
             persona: {
               type: 'string',
               description:
-                'Persona name to load saved auth state for (e.g. "patient", "doctor", "admin"). ' +
-                'If a saved state exists the session will be pre-authenticated. ' +
-                'If not, the app will redirect to login — log in manually then call ' +
-                'browser_command(["state-save", ".playwright-auth/{persona}.json"]) to persist for next time.',
+          'Pass "persona" (e.g. "patient", "doctor", "admin") to load saved auth state. ' +
+          'If a different persona is requested mid-session, the browser state will be switched automatically. ' +
+          'If no saved state exists, the app will redirect to login — log in manually then call ' +
+          'browser_command(["state-save", ".playwright-auth/{persona}.json"]) to persist for next time.',
             },
           },
           required: ['url'],

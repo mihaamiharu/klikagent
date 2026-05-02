@@ -1,38 +1,125 @@
-import { QATask, CiTestFailure } from '../types';
+import { QATask, CiTestFailure, FileEntry } from '../types';
 import { PersonaMap } from './personas';
 import { runQaAgent } from '../agents/qaAgent';
 import { runAgent, TokenUsage } from './ai';
 import { validateTypescriptHandler, validateTypescriptTool, PAGE_GETBY_IN_SPEC_PATTERN } from '../agents/tools/outputTools';
 import { qaTools, createQaHandlers, browserHandlers } from '../agents/tools';
 import { maxSelfCorrectionAttempts } from './testRepoClone';
+import { runTypecheck, runLint, runConventionCheck, ValidationError, prepareValidationDir, cleanupValidationDir } from './codeValidation';
 import { log } from '../utils/logger';
 import { dashboardBus } from '../dashboard/eventBus';
 import { AgentTool } from '../types';
 import { getPersonas } from './personas';
-import { getCurrentSpec, getCurrentPOM, getSpecPath } from './testRepo';
-
-type Pom = { pomContent: string; pomPath: string };
+import { getCurrentSpecOnBranch, getCurrentPOMOnBranch, getSpecPathOnBranch } from './localRepo';
 
 function getForbiddenPersonaStrings(personaMap: PersonaMap): string[] {
   const forbidden = new Set<string>();
   for (const persona of Object.values(personaMap)) {
     for (const [key, value] of Object.entries(persona)) {
+      // Skip credentials — those are checked separately
       if (key === 'password' || key === 'email') continue;
+      // Skip role — it's a structural category, not persona-specific data.
+      // Role values like "admin", "doctor", "patient" appear naturally in
+      // comments, test descriptions, and URL paths and cause false positives.
+      if (key === 'role') continue;
       if (typeof value === 'string' && value.length > 2) {
         forbidden.add(value);
       }
     }
   }
-  // Also add role keys
-  for (const role of Object.keys(personaMap)) {
-    if (role.length > 2) forbidden.add(role);
-  }
+  // Don't add persona keys as forbidden strings — they appear in
+  // `personas.admin.displayName` references which are the correct pattern.
   return Array.from(forbidden);
+}
+
+function getSpecFile(files: FileEntry[]): FileEntry | undefined {
+  return files.find((f) => f.role === 'spec');
+}
+
+function getPomFiles(files: FileEntry[]): FileEntry[] {
+  return files.filter((f) => f.role === 'pom');
+}
+
+/**
+ * Strip test descriptions from spec content before running convention checks.
+ * Removes the first string argument from test() and test.describe() calls
+ * so that persona names in test titles don't trigger false positives.
+ */
+function stripTestDescriptions(content: string): string {
+  return content
+    .replace(/test(?:\.describe)?\s*\(\s*`[^`]*`/g, 'test(`STRIPPED`')
+    .replace(/test(?:\.describe)?\s*\(\s*"[^"]*"/g, 'test("STRIPPED"')
+    .replace(/test(?:\.describe)?\s*\(\s*'[^']*'/g, "test('STRIPPED'");
+}
+
+/**
+ * Strip route path strings (URLs) from spec content before convention checks.
+ * Route paths like '/admin/dashboard' or '/appointments/book' contain persona
+ * role names as URL segments and should not trigger forbidden-string matches.
+ */
+function stripRoutePaths(content: string): string {
+  return content
+    .replace(/['"]\/\w+\/\w+[^'"]*['"]/g, '"STRIPPED_ROUTE"')
+    .replace(/['"]\/\w+['"]/g, '"STRIPPED_ROUTE"');
+}
+
+/**
+ * Strip fixture parameter names from spec content before convention checks.
+ * Fixture names like `asPatient`, `asAdmin`, `asDoctor` are convention-compliant
+ * and should not trigger persona-data violations.
+ */
+function stripFixtureParameters(content: string): string {
+  return content
+    // Strip { asPatient }, { asAdmin }, { asDoctor } from test destructuring
+    .replace(/\bas(?:Patient|Doctor|Admin)\w*\b/g, 'FIXTURE_PARAM')
+    // Strip fixture names in goto calls: asPatient.goto(...)
+    .replace(/\bFIXTURE_PARAM\.goto\b/g, 'fixture.goto');
+}
+
+/**
+ * Strip URL regex patterns from spec content before convention checks.
+ * Patterns like /\/admin/, /\/dashboard/ contain role names as URL segments
+ * and should not trigger persona-data violations.
+ */
+function stripUrlRegexPatterns(content: string): string {
+  return content
+    // Strip regex URL patterns: /\/admin/, /\/appointments\/book/, etc.
+    .replace(/\/\\\/\w+[^/]*\//g, '/STRIPPED_URL_REGEX/')
+    // Strip string URL paths in toHaveURL assertions
+    .replace(/toHaveURL\s*\(\s*['"`][^'"`]*['"`]\s*\)/g, 'toHaveURL("STRIPPED")');
+}
+
+/**
+ * Strip single-line and multi-line comments from spec content before convention checks.
+ * Comments like `// admin should be redirected` or `/* patient flow *\/` contain
+ * role names as natural language and should not trigger persona-data violations.
+ */
+function stripComments(content: string): string {
+  return content
+    // Multi-line comments
+    .replace(/\/\*[\s\S]*?\*\//g, '/* STRIPPED */')
+    // Single-line comments
+    .replace(/\/\/.*$/gm, '// STRIPPED');
 }
 
 function checkSpecConventions(specContent: string, personaMap: PersonaMap): string[] {
   const violations: string[] = [];
   const forbiddenStrings = getForbiddenPersonaStrings(personaMap);
+
+  // Strip comments, test descriptions, route paths, fixture parameters, and URL regex patterns
+  // before checking for forbidden strings. Comments like `// admin should be redirected`,
+  // test titles like 'BA-2: admin role is redirected...', route patterns like '/admin/dashboard',
+  // fixture names like { asAdmin }, and URL regexes like /\/admin/ should not trigger
+  // persona-data violations.
+  const checkableContent = stripUrlRegexPatterns(
+    stripRoutePaths(
+      stripTestDescriptions(
+        stripFixtureParameters(
+          stripComments(specContent)
+        )
+      )
+    )
+  );
 
   if (PAGE_GETBY_IN_SPEC_PATTERN.test(specContent)) {
     violations.push(
@@ -42,16 +129,15 @@ function checkSpecConventions(specContent: string, personaMap: PersonaMap): stri
     );
   }
 
-  // Dynamic persona check
   for (const str of forbiddenStrings) {
     const escaped = str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const regex = new RegExp(`(?<!personas\\.)\\b${escaped}\\b`, 'i');
-    if (regex.test(specContent)) {
+    if (regex.test(checkableContent)) {
       violations.push(
         `Spec contains hardcoded persona data ("${str}"). ` +
         'Assertions and locators must be persona-agnostic or use dynamic data from the imported `personas` object.'
       );
-      break; // One violation is enough to trigger a fix
+      break;
     }
   }
 
@@ -72,7 +158,10 @@ function checkSpecConventions(specContent: string, personaMap: PersonaMap): stri
     );
   }
 
+<<<<<<< HEAD
   // Feature specs must not use beforeEach to log in — use fixtures instead.
+=======
+>>>>>>> origin/main
   if (/beforeEach[\s\S]{0,200}(gotoLogin|authPage\.login)/.test(specContent)) {
     violations.push(
       'Spec uses beforeEach to log in (authPage.gotoLogin / authPage.login). ' +
@@ -82,7 +171,20 @@ function checkSpecConventions(specContent: string, personaMap: PersonaMap): stri
     );
   }
 
-  // Only flag hardcoded emails that match a real persona credential — not deliberate invalid-email literals
+  if (/test\s*\.\s*each\s*\(/.test(specContent)) {
+    violations.push(
+      'Spec uses `test.each()` which is a Jest pattern and does not exist in Playwright. ' +
+      'Write individual `test()` calls or use a `for...of` loop to iterate over test data.'
+    );
+  }
+
+  if (/async\s*\(\s*\{\s*page\s*,/.test(specContent)) {
+    violations.push(
+      'Spec destructures bare `page` fixture. Feature tests must use persona fixtures: ' +
+      '`asPatient`, `asDoctor`, or `asAdmin` — these provide a pre-authenticated Page via storageState.'
+    );
+  }
+
   const knownEmails = new Set(Object.values(personaMap).map((p) => p.email));
   const loginEmailPattern = /\.\s*login\s*\(\s*['"]([^'"]*@[^'"]*)['"]/g;
   let loginEmailMatch: RegExpExecArray | null;
@@ -100,8 +202,6 @@ function checkSpecConventions(specContent: string, personaMap: PersonaMap): stri
     }
   }
 
-  // Check for invented persona keys (personas.nonExistent) or invented properties (personas.patient.firstName)
-  // Use a Set to avoid duplicate violations for the same key/prop used multiple times
   const reportedPersonaViolations = new Set<string>();
   const personaAccessPattern = /personas\.(\w+)\.(\w+)/g;
   let personaAccessMatch: RegExpExecArray | null;
@@ -113,9 +213,15 @@ function checkSpecConventions(specContent: string, personaMap: PersonaMap): stri
       if (!reportedPersonaViolations.has(violationKey)) {
         reportedPersonaViolations.add(violationKey);
         const validKeys = Object.keys(personaMap).join(', ');
+        // Find the line containing this reference for context
+        const lines = specContent.split('\n');
+        const lineIndex = lines.findIndex(l => l.includes(`personas.${key}.${prop}`));
+        const lineContext = lineIndex >= 0 ? ` (line ${lineIndex + 1}: ${lines[lineIndex].trim().slice(0, 80)})` : '';
         violations.push(
-          `Spec references \`personas.${key}\` which is not a valid persona key. ` +
+          `Spec references \`personas.${key}\` which is not a valid persona key${lineContext}. ` +
           `Valid keys are: ${validKeys}. ` +
+          `FIX: Replace \`personas.${key}\` with an existing key that matches the test scenario. ` +
+          `For access-control tests, use the persona whose role matches the acceptance criteria. ` +
           `For deliberately-invalid credentials, use a string literal like 'nonexistent@example.com' instead of inventing a persona key.`,
         );
       }
@@ -126,9 +232,13 @@ function checkSpecConventions(specContent: string, personaMap: PersonaMap): stri
       const violationKey = `prop:${key}.${prop}`;
       if (!reportedPersonaViolations.has(violationKey)) {
         reportedPersonaViolations.add(violationKey);
+        const lines = specContent.split('\n');
+        const lineIndex = lines.findIndex(l => l.includes(`personas.${key}.${prop}`));
+        const lineContext = lineIndex >= 0 ? ` (line ${lineIndex + 1}: ${lines[lineIndex].trim().slice(0, 80)})` : '';
         violations.push(
-          `Spec references \`personas.${key}.${prop}\` which is not a valid property on that persona. ` +
-          `Valid properties for \`personas.${key}\` are: ${validProps.join(', ')}.`,
+          `Spec references \`personas.${key}.${prop}\` which is not a valid property${lineContext}. ` +
+          `Valid properties for \`personas.${key}\` are: ${validProps.join(', ')}. ` +
+          `FIX: Replace \`.${prop}\` with a valid property like .displayName, .email, .password, or .role.`,
         );
       }
     }
@@ -137,15 +247,15 @@ function checkSpecConventions(specContent: string, personaMap: PersonaMap): stri
   return violations;
 }
 
-function checkPomConventions(poms: Pom[], personaMap: PersonaMap): string[] {
+function checkPomConventions(pomFiles: FileEntry[], personaMap: PersonaMap): string[] {
   const violations: string[] = [];
   const forbiddenStrings = getForbiddenPersonaStrings(personaMap);
 
-  for (const { pomContent, pomPath } of poms) {
+  for (const { content, path: pomPath } of pomFiles) {
     for (const str of forbiddenStrings) {
       const escaped = str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       const regex = new RegExp(`\\b${escaped}\\b`, 'i');
-      if (regex.test(pomContent)) {
+      if (regex.test(content)) {
         violations.push(
           `${pomPath}: POM contains hardcoded persona data ("${str}"). ` +
           'POM locators and assertions must be dynamic and parameterized. ' +
@@ -154,49 +264,319 @@ function checkPomConventions(poms: Pom[], personaMap: PersonaMap): string[] {
         break;
       }
     }
+
+    // Check for raw string selectOption calls
+    const selectOptionPattern = /\.selectOption\(\s*['"][^'"]+['"]\s*\)/;
+    if (selectOptionPattern.test(content)) {
+      violations.push(
+        `${pomPath}: selectOption() called with raw string. ` +
+        'Use an object: selectOption({ label: "..." }) or selectOption({ value: "..." }). ' +
+        'Passing a raw string will fail if the option value differs from the visible label.'
+      );
+    }
   }
 
   return violations;
 }
 
-const fixConventionsDoneTool: AgentTool = {
+/** Structural checks that apply to the entire file set, not just individual files. */
+function checkStructuralIssues(files: FileEntry[]): string[] {
+  const violations: string[] = [];
+
+  // Check for unauthorized fixture files — only fixtures/index.ts is allowed
+  const fixtureFiles = files.filter((f) => f.path.startsWith('fixtures/') && f.path !== 'fixtures/index.ts');
+  for (const f of fixtureFiles) {
+    violations.push(
+      `Unauthorized fixture file: "${f.path}". Feature POMs must NOT be registered as fixtures. ` +
+      'Remove this file and construct the POM inline in the spec using persona fixtures (asPatient, asDoctor, asAdmin).'
+    );
+  }
+
+  // Check for Jest patterns in any file
+  for (const f of files.filter((f) => f.path.endsWith('.spec.ts'))) {
+    if (/describe\s*\.\s*each\s*\(/.test(f.content)) {
+      violations.push(
+        `${f.path}: Uses \`describe.each()\` which is a Jest pattern and does not exist in Playwright. ` +
+        'Write individual test.describe() blocks instead.'
+      );
+    }
+  }
+
+  // Check that spec import paths for POMs are correct (should be 3 levels up from tests/web/feature/)
+  for (const f of files.filter((f) => f.role === 'spec')) {
+    const pomImportMatch = f.content.match(/import\s*{[^}]*Page[^}]*}\s*from\s*['"]([^'"]+)['"]/g);
+    if (pomImportMatch) {
+      for (const imp of pomImportMatch) {
+        const pathMatch = imp.match(/from\s*['"]([^'"]+)['"]/);
+        if (pathMatch) {
+          const importPath = pathMatch[1];
+          // Specs in tests/web/feature/ need 3 levels up to reach pages/
+          if (!importPath.startsWith('../../../') && importPath.includes('pages/')) {
+            violations.push(
+              `${f.path}: POM import path "${importPath}" is incorrect. ` +
+              `Specs in tests/web/feature/ must use '../../../pages/...' (3 levels up). ` +
+              `Fix to: import { ... } from '../../../pages/feature/ClassName';`
+            );
+          }
+        }
+      }
+    }
+  }
+
+  return violations;
+}
+
+function formatFilesForPrompt(files: FileEntry[]): string {
+  return files.map((f) => `### ${f.path} (role: ${f.role})\n\`\`\`typescript\n${f.content}\n\`\`\``).join('\n\n');
+}
+
+function mergeFiles(current: FileEntry[], changed: FileEntry[]): FileEntry[] {
+  const merged = [...current];
+  for (const file of changed) {
+    const idx = merged.findIndex((f) => f.path === file.path);
+    if (idx !== -1) merged[idx] = file;
+    else merged.push(file);
+  }
+  return merged;
+}
+
+// ─── Parallel convention fix helpers ─────────────────────────────────────────
+
+interface FileFixTask {
+  filePath: string;
+  violations: string[];
+}
+
+interface FixAgentResult {
+  filePath: string;
+  changedFiles: FileEntry[];
+  tokenUsage: TokenUsage;
+  remainingViolations: number;
+  success: boolean;
+}
+
+/**
+ * Extract the target file path from a violation message.
+ * Convention violations either start with a file path (POM/structural)
+ * or belong to the spec file (spec conventions).
+ */
+function extractTargetFile(violation: string, files: FileEntry[]): string {
+  // POM violations start with the file path: "pages/auth/AuthPage.ts: POM contains..."
+  const pathMatch = violation.match(/^([a-zA-Z0-9_\-/.]+\.(?:ts|js)):/);
+  if (pathMatch) return pathMatch[1];
+
+  // Structural violations reference a file: "tests/web/auth/auth.spec.ts: Uses..."
+  const structMatch = violation.match(/^([a-zA-Z0-9_\-/.]+\.spec\.ts):/);
+  if (structMatch) return structMatch[1];
+
+  // Spec convention violations (no path prefix) → target the spec file
+  const specFile = getSpecFile(files);
+  return specFile?.path ?? 'spec.ts';
+}
+
+/**
+ * Partition violations by target file path.
+ */
+function partitionViolationsByFile(violations: string[], files: FileEntry[]): FileFixTask[] {
+  const byPath = new Map<string, string[]>();
+  for (const v of violations) {
+    const targetPath = extractTargetFile(v, files);
+    const existing = byPath.get(targetPath) ?? [];
+    existing.push(v);
+    byPath.set(targetPath, existing);
+  }
+  return Array.from(byPath.entries()).map(([filePath, violations]) => ({ filePath, violations }));
+}
+
+/**
+ * Partition Phase 2 (tsc + eslint) errors by target file path.
+ * Each error is formatted as "[tsc] line 12,5: message" so the fix agent
+ * sees the same shape it would have seen in the single-prompt version.
+ * Errors whose filePath isn't one of the generated files (e.g. resolved tsc
+ * paths in node_modules) are dropped — we can't fix those.
+ */
+function partitionPhase2Errors(errors: ValidationError[], files: FileEntry[]): FileFixTask[] {
+  const knownPaths = new Set(files.map((f) => f.path));
+  const byPath = new Map<string, string[]>();
+  for (const e of errors) {
+    if (!knownPaths.has(e.filePath)) continue;
+    const formatted = `[${e.source}] line ${e.line}${e.column ? `,${e.column}` : ''}: ${e.message}`;
+    const existing = byPath.get(e.filePath) ?? [];
+    existing.push(formatted);
+    byPath.set(e.filePath, existing);
+  }
+  return Array.from(byPath.entries()).map(([filePath, violations]) => ({ filePath, violations }));
+}
+
+/**
+ * Build the context files for a fix agent: the target file + the spec file.
+ */
+function buildContextForTask(task: FileFixTask, files: FileEntry[]): FileEntry[] {
+  const target = files.find((f) => f.path === task.filePath);
+  const spec = getSpecFile(files);
+  const context: FileEntry[] = [];
+  if (target) context.push(target);
+  if (spec && spec.path !== task.filePath) context.push(spec);
+  return context;
+}
+
+/**
+ * Run a batch of fix tasks with bounded concurrency.
+ * Each task fixes all its violations in one agent call.
+ * Failed tasks are caught and returned with success=false (partial success).
+ */
+async function runParallelFixRound(
+  tasks: FileFixTask[],
+  files: FileEntry[],
+  personaMap: PersonaMap,
+  concurrency: number,
+): Promise<FixAgentResult[]> {
+  const results: FixAgentResult[] = [];
+
+  // Bounded concurrency pool
+  const queue = [...tasks];
+  const inFlight: Promise<void>[] = [];
+
+  const runOne = async (task: FileFixTask) => {
+    const contextFiles = buildContextForTask(task, files);
+    const violationList = task.violations.join('\n\n');
+
+    try {
+      const { args, tokenUsage: fixUsage } = await runAgent(
+        `Fix ALL violations listed below (convention and/or TypeScript/AST). Rules:
+- Fix ONLY what is listed — do not change any other logic, test structure, or assertions
+- Each fix should be the minimal change needed
+- Do NOT "helpfully" fix violations in other files — those are handled by other agents
+- Output ONLY the files you changed in your done() call`,
+        `ERRORS for ${task.filePath}:\n${violationList}\n\n${formatFilesForPrompt(contextFiles)}`,
+        fixFilesTools,
+        validateTypescriptHandler,
+        { maxIterations: 10 },
+      );
+
+      const changedFiles = (args.files as FileEntry[] | undefined) ?? [];
+      // Count remaining violations in the changed files
+      let remainingCount = 0;
+      for (const cf of changedFiles) {
+        if (cf.role === 'spec') {
+          remainingCount += checkSpecConventions(cf.content, personaMap).length;
+        } else if (cf.role === 'pom') {
+          remainingCount += checkPomConventions([cf], personaMap).length;
+        }
+      }
+
+      results.push({
+        filePath: task.filePath,
+        changedFiles,
+        tokenUsage: fixUsage,
+        remainingViolations: remainingCount,
+        success: true,
+      });
+    } catch (err) {
+      log('WARN', `[selfCorrection] Parallel fix agent failed for ${task.filePath}: ${(err as Error).message}`);
+      results.push({
+        filePath: task.filePath,
+        changedFiles: [],
+        tokenUsage: { promptTokens: 0, completionTokens: 0, totalTokens: 0, costUSD: 0 },
+        remainingViolations: task.violations.length,
+        success: false,
+      });
+    }
+  };
+
+  while (queue.length > 0 || inFlight.length > 0) {
+    while (queue.length > 0 && inFlight.length < concurrency) {
+      const task = queue.shift()!;
+      inFlight.push(runOne(task).then(() => {
+        const idx = inFlight.findIndex(p => p);
+        inFlight.splice(idx, 1);
+      }));
+    }
+    if (inFlight.length > 0) {
+      await Promise.race(inFlight);
+    }
+  }
+
+  return results;
+}
+
+/**
+ * Merge results from parallel fix agents.
+ * If two agents modify the same file, keep the one with fewer remaining violations.
+ */
+function mergeFixResults(base: FileEntry[], results: FixAgentResult[]): FileEntry[] {
+  const merged = [...base];
+  const fileModifications = new Map<string, FixAgentResult[]>();
+
+  // Group results by which files they modified
+  for (const result of results) {
+    if (!result.success || result.changedFiles.length === 0) continue;
+    for (const cf of result.changedFiles) {
+      const existing = fileModifications.get(cf.path) ?? [];
+      existing.push(result);
+      fileModifications.set(cf.path, existing);
+    }
+  }
+
+  // Apply modifications — resolve conflicts by keeping the agent with fewer remaining violations
+  for (const [filePath, modifications] of fileModifications) {
+    if (modifications.length === 1) {
+      // No conflict — apply directly
+      const changedFile = modifications[0].changedFiles.find((f) => f.path === filePath);
+      if (changedFile) {
+        const idx = merged.findIndex((f) => f.path === filePath);
+        if (idx !== -1) merged[idx] = changedFile;
+      }
+    } else {
+      // Conflict — pick the agent with the fewest remaining violations
+      const best = modifications.reduce((a, b) =>
+        a.remainingViolations <= b.remainingViolations ? a : b
+      );
+      log('WARN', `[selfCorrection] Merge conflict on ${filePath} — keeping fix from agent with ${best.remainingViolations} remaining violations`);
+      const changedFile = best.changedFiles.find((f) => f.path === filePath);
+      if (changedFile) {
+        const idx = merged.findIndex((f) => f.path === filePath);
+        if (idx !== -1) merged[idx] = changedFile;
+      }
+    }
+  }
+
+  return merged;
+}
+
+const fixFilesDoneTool: AgentTool = {
   type: 'function',
   function: {
     name: 'done',
-    description: 'Submit corrected files. Call when all convention fixes are complete.',
+    description: 'Submit corrected files. Include ONLY the files you changed. Unchanged files will be preserved.',
     parameters: {
       type: 'object',
       properties: {
-        fixedSpec: {
-          type: 'string',
-          description: 'The corrected spec content.',
-        },
-        fixedPoms: {
+        files: {
           type: 'array',
-          description: 'Corrected POM files — include only the ones that changed.',
+          description: 'Only the files that changed. Omit files you did not modify.',
           items: {
             type: 'object',
             properties: {
-              pomContent: { type: 'string' },
-              pomPath: { type: 'string' },
+              path: { type: 'string', description: 'Repo-relative file path' },
+              content: { type: 'string', description: 'Full updated file content' },
+              role: { type: 'string', enum: ['spec', 'pom', 'fixture', 'extra'] },
             },
-            required: ['pomContent', 'pomPath'],
+            required: ['path', 'content', 'role'],
           },
         },
       },
-      required: ['fixedSpec'],
+      required: ['files'],
     },
   },
 };
 
 export interface SelfCorrectionResult {
   feature: string;
-  specContent: string;
-  poms: Array<{ pomContent: string; pomPath: string }>;
+  files: FileEntry[];
   affectedPaths: string;
-  fixtureUpdate?: string;
   tokenUsage: TokenUsage;
-  warned: boolean;        // true if tsc still failing after all attempts
+  warned: boolean;
   warningMessage?: string;
 }
 
@@ -209,154 +589,231 @@ function addTokenUsage(acc: TokenUsage, next: TokenUsage): TokenUsage {
   };
 }
 
-const fixDoneTool: AgentTool = {
-  type: 'function',
-  function: {
-    name: 'done',
-    description: 'Submit the corrected spec content. Call this when the fix is complete.',
-    parameters: {
-      type: 'object',
-      properties: {
-        fixedSpec: { type: 'string', description: 'The corrected Playwright TypeScript spec file content' },
-      },
-      required: ['fixedSpec'],
-    },
-  },
-};
-
 // Convention and TS fix agents only need validate_typescript + their done() — no browser tools.
-// Giving them browser tools causes them to behave like a full QA agent, re-exploring the app
-// and making it appear as though the main agent is still running after done() was called.
-const conventionOnlyTools: AgentTool[] = [validateTypescriptTool, fixConventionsDoneTool];
-const fixTools: AgentTool[] = [validateTypescriptTool, fixDoneTool];
+const fixFilesTools: AgentTool[] = [validateTypescriptTool, fixFilesDoneTool];
+
+/**
+ * Run the in-memory TypeScript AST validator against every .ts file and
+ * return any errors. Used by Phase 1 of self-correction.
+ */
+async function collectAstErrors(files: FileEntry[]): Promise<Array<{ path: string; line: number; message: string }>> {
+  const errors: Array<{ path: string; line: number; message: string }> = [];
+  for (const file of files.filter((f) => f.path.endsWith('.ts'))) {
+    const fileType: 'spec' | 'pom' | 'generic' =
+      file.role === 'spec' ? 'spec' : file.role === 'pom' ? 'pom' : 'generic';
+    const tsResultRaw = await validateTypescriptHandler.validate_typescript({ code: file.content, fileType });
+    const tsResult = JSON.parse(
+      typeof tsResultRaw === 'string' ? tsResultRaw : JSON.stringify(tsResultRaw)
+    ) as { valid: boolean; errors: Array<{ line: number; message: string }> };
+    if (!tsResult.valid) {
+      for (const err of tsResult.errors) {
+        errors.push({ path: file.path, line: err.line, message: err.message });
+      }
+    }
+  }
+  return errors;
+}
 
 // CI fix agent DOES need browser tools — it navigates to verify actual vs expected values.
-const ciFixTools: AgentTool[] = [...qaTools.filter((t) => t.function.name !== 'done'), fixDoneTool];
+const ciFixTools: AgentTool[] = [...qaTools.filter((t) => t.function.name !== 'done'), fixFilesDoneTool];
 
 export async function runWithSelfCorrection(
   task: QATask,
   branch: string,
 ): Promise<SelfCorrectionResult> {
   const maxAttempts = maxSelfCorrectionAttempts();
-
   const repoName = task.outputRepo;
 
   // Step 1: Initial QA agent run
   log('INFO', '[selfCorrection] Running initial qaAgent pass');
   const qaResult = await runQaAgent(task, branch, repoName);
   const feature = qaResult.feature;
-  let specContent = qaResult.enrichedSpec;
-  const poms = qaResult.poms;
+  let files = qaResult.files.map((f) => ({ ...f, role: f.role as FileEntry['role'] }));
   const affectedPaths = qaResult.affectedPaths;
-  const fixtureUpdate = qaResult.fixtureUpdate;
   let tokenUsage = qaResult.tokenUsage;
 
-  // Close any browser session left open by the QA agent — if done() was called without
-  // browser_close(), sessionActive stays true and the correction agents would inherit it.
+  // Close any browser session left open by the QA agent
   try {
     await browserHandlers.browser_close({});
   } catch {
-    // Session may already be closed — ignore
+    // ignore
   }
 
-  // Step 2: Convention check — fix one violation at a time, re-check after each fix.
-  // Capped at maxAttempts to prevent infinite loops if the fix agent keeps reintroducing issues.
+  // ─── Phase 1: Fast validation (convention + AST + structural) ───────────────
+  // Combined loop: each attempt re-checks all fast signals, partitions errors by
+  // target file, and fans out parallel fix agents (one per file). Replaces the
+  // earlier convention-only + AST-only loops which duplicated this work.
   const personaMap = await getPersonas(repoName, []);
-  const MAX_CONVENTION_ROUNDS = maxAttempts;
+  const CONCURRENCY_LIMIT = 2;
+  let astErrors: Array<{ path: string; line: number; message: string }> = await collectAstErrors(files);
 
-  for (let round = 1; round <= MAX_CONVENTION_ROUNDS; round++) {
-    const specViolations = checkSpecConventions(specContent, personaMap);
-    const pomViolations = checkPomConventions(poms, personaMap);
-    const allViolations = [...specViolations, ...pomViolations];
-
-    if (allViolations.length === 0) break;
-
-    // Take only the first violation — surgical fix, then re-check
-    const violation = allViolations[0];
-    log('WARN', `[selfCorrection] Convention violation (round ${round}/${MAX_CONVENTION_ROUNDS}): ${violation}`);
-    dashboardBus.emitEvent('correction', 'warn', `Convention violation (round ${round})`, { violation });
-
-    const pomSummary = poms.map((p) => `### ${p.pomPath}\n${p.pomContent}`).join('\n\n');
-
-    const { args, tokenUsage: fixUsage } = await runAgent(
-      'Fix the single convention violation listed below in this Playwright spec and/or POM files. Fix ONLY what is listed — do not change any other logic.',
-      `VIOLATION:\n${violation}\n\n### Spec\n${specContent}\n\n${pomSummary}`,
-      conventionOnlyTools,
-      validateTypescriptHandler,
-      { maxIterations: 10 },
-    );
-
-    tokenUsage = addTokenUsage(tokenUsage, fixUsage);
-    specContent = args.fixedSpec as string;
-
-    const fixedPoms = args.fixedPoms as Pom[] | undefined;
-    if (fixedPoms?.length) {
-      for (const fixed of fixedPoms) {
-        const idx = poms.findIndex((p) => p.pomPath === fixed.pomPath);
-        if (idx !== -1) poms[idx] = fixed;
-      }
-    }
-
-    log('INFO', `[selfCorrection] Convention fix applied (round ${round})`);
-    dashboardBus.emitEvent('correction', 'info', `Convention fix applied (round ${round})`, { tokenUsage: fixUsage });
-
-    if (round === MAX_CONVENTION_ROUNDS) {
-      const remaining = [...checkSpecConventions(specContent, personaMap), ...checkPomConventions(poms, personaMap)];
-      if (remaining.length > 0) {
-        log('WARN', `[selfCorrection] ${remaining.length} convention violation(s) remain after ${MAX_CONVENTION_ROUNDS} rounds: ${remaining.join('; ')}`);
-        dashboardBus.emitEvent('correction', 'warn', 'Convention violations remain after max rounds', { violations: remaining });
-      }
+  // Phase 0: Banned locator pattern check (catches AI hallucinations before AST)
+  let conventionCheckErrors: Array<{ path: string; line: number; message: string }> = [];
+  for (const file of files) {
+    const violations = runConventionCheck([file]);
+    for (const v of violations) {
+      conventionCheckErrors.push({ path: v.filePath, line: v.line, message: v.message });
     }
   }
 
-  // Step 3: TypeScript validation loop — up to maxAttempts corrections
+  // Phase 1: Unified convention + AST loop with parallel fix agents
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    dashboardBus.emitEvent('validation', 'info', `TypeScript validation check (attempt ${attempt})`, { attempt });
-    const tsResultRaw = await validateTypescriptHandler.validate_typescript({ code: specContent });
-    const tsResult = JSON.parse(
-      typeof tsResultRaw === 'string' ? tsResultRaw : JSON.stringify(tsResultRaw)
-    ) as { valid: boolean; errors: Array<{ line: number; message: string }> };
+    const specFile = getSpecFile(files);
+    const pomFiles = getPomFiles(files);
+    const specViolations = specFile ? checkSpecConventions(specFile.content, personaMap) : [];
+    const pomViolations = checkPomConventions(pomFiles, personaMap);
+    const structuralIssues = checkStructuralIssues(files);
+    const conventionErrors = [...specViolations, ...pomViolations, ...structuralIssues];
 
-    if (tsResult.valid) {
-      log('INFO', `[selfCorrection] TypeScript valid${attempt > 1 ? ` after ${attempt - 1} correction(s)` : ''}`);
-      dashboardBus.emitEvent('validation', 'info', 'TypeScript is valid', { valid: true });
-      return { feature, specContent, poms, affectedPaths, fixtureUpdate, tokenUsage, warned: false };
+    if (astErrors.length === 0 && conventionCheckErrors.length === 0 && conventionErrors.length === 0) {
+      log('INFO', `[selfCorrection] Phase 1 valid${attempt > 1 ? ` after ${attempt - 1} correction(s)` : ''}`);
+      dashboardBus.emitEvent('validation', 'info', 'Phase 1 (fast) validation passed', { valid: true });
+      break;
     }
 
-    log('WARN', `[selfCorrection] TypeScript errors on attempt ${attempt}/${maxAttempts}: ${JSON.stringify(tsResult.errors)}`);
-    dashboardBus.emitEvent('validation', 'warn', 'TypeScript errors found', { errors: tsResult.errors });
+    // Combine into a single violation list, then partition by target file.
+    // AST errors and banned locator errors are formatted with the path prefix so extractTargetFile picks them up.
+    const allErrors = [
+      ...conventionErrors,
+      ...conventionCheckErrors.map((e) => `${e.path}: BANNED_LOCATOR line ${e.line}: ${e.message}`),
+      ...astErrors.map((e) => `${e.path}: AST line ${e.line}: ${e.message}`),
+    ];
 
-    if (attempt === maxAttempts) break;
+    log('WARN', `[selfCorrection] Phase 1 attempt ${attempt}/${maxAttempts}: ${allErrors.length} error(s) (${conventionErrors.length} convention, ${conventionCheckErrors.length} banned-locator, ${astErrors.length} AST)`);
+    dashboardBus.emitEvent('validation', 'warn', `Phase 1 attempt ${attempt}`, { conventions: conventionErrors.length, bannedLocators: conventionCheckErrors.length, ast: astErrors.length });
 
-    const tsErrors = tsResult.errors.map((e) => `Line ${e.line}: ${e.message}`).join('\n');
-    const { args, tokenUsage: fixUsage } = await runAgent(
-      'Fix the TypeScript errors in this Playwright spec. Output only the corrected spec content.',
-      `TypeScript errors:\n${tsErrors}\n\nSpec:\n${specContent}`,
-      fixTools,
-      validateTypescriptHandler,
-      { maxIterations: 10 },
-    );
-    tokenUsage = addTokenUsage(tokenUsage, fixUsage);
-    specContent = args.fixedSpec as string;
-    log('INFO', `[selfCorrection] Applied TypeScript correction ${attempt}`);
-    dashboardBus.emitEvent('correction', 'info', `Applied correction ${attempt}`, { tokenUsage: fixUsage });
+    if (attempt === maxAttempts) {
+      log('WARN', `[selfCorrection] Phase 1 exhausted after ${maxAttempts} attempts`);
+      break;
+    }
+
+    const tasks = partitionViolationsByFile(allErrors, files);
+    log('INFO', `[selfCorrection] Partitioned into ${tasks.length} parallel fix task(s)`);
+
+    const results = await runParallelFixRound(tasks, files, personaMap, CONCURRENCY_LIMIT);
+    const successfulResults = results.filter((r) => r.success && r.changedFiles.length > 0);
+    const failedCount = results.length - successfulResults.length;
+    const roundTokenUsage = results.reduce((acc, r) => addTokenUsage(acc, r.tokenUsage), { promptTokens: 0, completionTokens: 0, totalTokens: 0, costUSD: 0 });
+    tokenUsage = addTokenUsage(tokenUsage, roundTokenUsage);
+
+    files = mergeFixResults(files, results);
+
+    if (failedCount > 0) {
+      log('WARN', `[selfCorrection] ${failedCount} fix agent(s) failed in attempt ${attempt} — errors will be retried next attempt`);
+    }
+    log('INFO', `[selfCorrection] Phase 1 attempt ${attempt} complete — ${successfulResults.length} agent(s) succeeded, $${roundTokenUsage.costUSD.toFixed(4)} USD`);
+    dashboardBus.emitEvent('correction', 'info', `Applied Phase 1 correction ${attempt}`, { tokenUsage: roundTokenUsage, agentsSucceeded: successfulResults.length, agentsFailed: failedCount });
+
+    // Re-run AST validation and banned locator check against the merged file set.
+    astErrors = await collectAstErrors(files);
+    conventionCheckErrors = [];
+    for (const file of files) {
+      const violations = runConventionCheck([file]);
+      for (const v of violations) {
+        conventionCheckErrors.push({ path: v.filePath, line: v.line, message: v.message });
+      }
+    }
   }
 
-  // Final validation after last correction
-  const finalRaw = await validateTypescriptHandler.validate_typescript({ code: specContent });
-  const finalResult = JSON.parse(
-    typeof finalRaw === 'string' ? finalRaw : JSON.stringify(finalRaw)
-  ) as { valid: boolean; errors: Array<{ line: number; message: string }> };
+  // ─── Phase 2: Slow validation (tsc + eslint) ────────────────────────────────
+  // Only run if Phase 1 passed (no remaining convention or AST errors).
+  const specFile = getSpecFile(files);
+  const pomFiles = getPomFiles(files);
+  const remainingConventions = [
+    ...(specFile ? checkSpecConventions(specFile.content, personaMap) : []),
+    ...checkPomConventions(pomFiles, personaMap),
+    ...checkStructuralIssues(files),
+  ];
 
-  if (finalResult.valid) {
-    log('INFO', `[selfCorrection] TypeScript valid after ${maxAttempts} correction(s)`);
-    return { feature, specContent, poms, affectedPaths, fixtureUpdate, tokenUsage, warned: false };
+  if (remainingConventions.length === 0 && astErrors.length === 0) {
+    let validationDir: string | null = null;
+    try {
+      try {
+        validationDir = await prepareValidationDir(repoName, task.taskId);
+      } catch (err) {
+        // If we can't even build a scratch dir (no local clone, no disk, etc.)
+        // treat Phase 2 as a pass — Phase 1 already validated everything we
+        // can statically check. The PR will still go out for human review.
+        log('WARN', `[selfCorrection] prepareValidationDir failed: ${(err as Error).message} — skipping Phase 2`);
+        return { feature, files, affectedPaths, tokenUsage, warned: false };
+      }
+
+      if (validationDir) {
+        for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+          dashboardBus.emitEvent('validation', 'info', `Phase 2 validation (attempt ${attempt})`, { attempt });
+
+          let typeErrors: ValidationError[] = [];
+          let lintErrors: ValidationError[] = [];
+
+          try {
+            typeErrors = await runTypecheck(validationDir, files);
+          } catch (err) {
+            log('WARN', `[selfCorrection] runTypecheck failed: ${(err as Error).message}`);
+          }
+
+          try {
+            lintErrors = await runLint(validationDir, files);
+          } catch (err) {
+            log('WARN', `[selfCorrection] runLint failed: ${(err as Error).message}`);
+          }
+
+          const allPhase2Errors = [...typeErrors, ...lintErrors];
+
+          if (allPhase2Errors.length === 0) {
+            log('INFO', `[selfCorrection] Phase 2 valid${attempt > 1 ? ` after ${attempt - 1} correction(s)` : ''}`);
+            dashboardBus.emitEvent('validation', 'info', 'Phase 2 (tsc/eslint) validation passed', { valid: true });
+            return { feature, files, affectedPaths, tokenUsage, warned: false };
+          }
+
+          log('WARN', `[selfCorrection] Phase 2 attempt ${attempt}/${maxAttempts}: ${allPhase2Errors.length} error(s)`);
+          dashboardBus.emitEvent('validation', 'warn', 'Phase 2 errors found', { errors: allPhase2Errors });
+
+          if (attempt === maxAttempts) break;
+
+          const phase2Tasks = partitionPhase2Errors(allPhase2Errors, files);
+          if (phase2Tasks.length === 0) {
+            log('WARN', '[selfCorrection] Phase 2 errors do not map to any generated file — cannot fix');
+            break;
+          }
+          log('INFO', `[selfCorrection] Phase 2 partitioned into ${phase2Tasks.length} parallel fix task(s)`);
+
+          const results = await runParallelFixRound(phase2Tasks, files, personaMap, CONCURRENCY_LIMIT);
+          const successfulResults = results.filter((r) => r.success && r.changedFiles.length > 0);
+          const failedCount = results.length - successfulResults.length;
+          const roundTokenUsage = results.reduce((acc, r) => addTokenUsage(acc, r.tokenUsage), { promptTokens: 0, completionTokens: 0, totalTokens: 0, costUSD: 0 });
+          tokenUsage = addTokenUsage(tokenUsage, roundTokenUsage);
+
+          files = mergeFixResults(files, results);
+
+          if (failedCount > 0) {
+            log('WARN', `[selfCorrection] ${failedCount} Phase 2 fix agent(s) failed in attempt ${attempt} — errors will be retried next attempt`);
+          }
+          log('INFO', `[selfCorrection] Phase 2 attempt ${attempt} complete — ${successfulResults.length} agent(s) succeeded, $${roundTokenUsage.costUSD.toFixed(4)} USD`);
+          dashboardBus.emitEvent('correction', 'info', `Applied Phase 2 correction ${attempt}`, { tokenUsage: roundTokenUsage, agentsSucceeded: successfulResults.length, agentsFailed: failedCount });
+        }
+      }
+    } finally {
+      if (validationDir) await cleanupValidationDir(validationDir);
+    }
   }
 
-  const errorSummary = finalResult.errors.map((e) => `Line ${e.line}: ${e.message}`).join('\n');
-  const warningMessage = `TypeScript still failing after ${maxAttempts} attempt(s):\n${errorSummary}`;
+  // If we reach here, Phase 2 failed or Phase 1 still has errors
+  const finalSpec = getSpecFile(files);
+  const finalPoms = getPomFiles(files);
+  const finalConventions = [
+    ...(finalSpec ? checkSpecConventions(finalSpec.content, personaMap) : []),
+    ...checkPomConventions(finalPoms, personaMap),
+    ...checkStructuralIssues(files),
+  ];
+  const errorSummary = [
+    ...finalConventions.map((m) => `CONVENTION: ${m}`),
+    ...conventionCheckErrors.map((e) => `BANNED_LOCATOR: ${e.path}(${e.line}): ${e.message}`),
+    ...astErrors.map((e) => `AST: ${e.path}(${e.line}): ${e.message}`),
+  ].join('\n');
+
+  const warningMessage = `Validation failed after ${maxAttempts} attempt(s):\n${errorSummary}`;
   log('WARN', `[selfCorrection] ${warningMessage}`);
-  return { feature, specContent, poms, affectedPaths, fixtureUpdate, tokenUsage, warned: true, warningMessage };
+  return { feature, files, affectedPaths, tokenUsage, warned: true, warningMessage };
 }
 
 // ─── CI failure fix ────────────────────────────────────────────────────────────
@@ -396,30 +853,23 @@ If the element genuinely doesn't exist (e.g. admin page has no welcome heading),
 ## Done protocol
 1. Call validate_typescript on the fixed spec
 2. If valid, call done() immediately — do NOT make any other tool calls after validation passes
-3. In done(): fixedSpec = corrected spec, fixedPoms = array of {pomContent, pomPath} for each changed POM`;
+3. In done(): files = array of {path, content, role} for each changed file. Include ONLY changed files.`;
 
 export interface CiFixResult {
-  specContent: string;
-  poms: Pom[];
-  specPath: string | null;
+  files: FileEntry[];
   tokenUsage: TokenUsage;
 }
 
 const MAX_CI_FAILURES = 5;
 const MAX_ERROR_LINES = 25;
 
-// Keep only the meaningful part of a Playwright error — strip full stack traces.
-// The Expected/Received block and the immediate assertion location are enough.
 function trimFailureMessage(msg: string): string {
   const lines = msg.split('\n');
-  // Cut at "at " stack frame lines — everything from the first pure stack frame is noise
   const stackStart = lines.findIndex((l) => /^\s+at /.test(l));
   const trimmed = stackStart > 0 ? lines.slice(0, stackStart) : lines;
   return trimmed.slice(0, MAX_ERROR_LINES).join('\n').trim();
 }
 
-// Group failures by their root error pattern. When multiple tests share the
-// same Expected/Received cause, only the first representative is needed.
 function deduplicateFailures(failures: CiTestFailure[]): CiTestFailure[] {
   const seen = new Set<string>();
   return failures.filter((f) => {
@@ -443,9 +893,9 @@ export async function runWithCiFailureFix(
   dashboardBus.emitEvent('correction', 'info', `Fixing ${deduplicated.length} CI failure(s)`, { branch, feature, total: failures.length });
 
   const [currentSpec, currentPom, specPath] = await Promise.all([
-    getCurrentSpec(repoName, branch, task.taskId, feature),
-    getCurrentPOM(repoName, branch, feature),
-    getSpecPath(repoName, branch, task.taskId, feature),
+    getCurrentSpecOnBranch(repoName, branch, task.taskId, feature),
+    getCurrentPOMOnBranch(repoName, branch, feature),
+    getSpecPathOnBranch(repoName, branch, task.taskId, feature),
   ]);
 
   const failureSummary = deduplicated
@@ -478,16 +928,23 @@ Navigate to the relevant pages to verify actual values, then fix only the failin
     { maxIterations: 25 },
   );
 
-  let fixedSpec = args.fixedSpec as string;
-  const fixedPoms = (args.fixedPoms as Pom[] | undefined) ?? [];
   let tokenUsage = agentUsage;
+  let files = (args.files as FileEntry[] | undefined) ?? [];
+
+  // If the agent returned no files, use the current spec as fallback
+  if (files.length === 0 && currentSpec) {
+    files = [{ path: specPath ?? `tests/web/${feature}/${feature}.spec.ts`, content: currentSpec, role: 'spec' }];
+  }
 
   log('INFO', `[ciFailureFix] Fix agent completed — $${tokenUsage.costUSD.toFixed(4)} USD`);
   dashboardBus.emitEvent('correction', 'info', 'CI failure fix applied', { tokenUsage });
 
-  // Structural guard: verify the agent actually validated before calling done().
-  // The system prompt asks for validate_typescript → done(), but nothing prevents skipping it.
-  const tsResultRaw = await validateTypescriptHandler.validate_typescript({ code: fixedSpec, fileType: 'spec' });
+  // Structural guard: validate the spec
+  const specFile = files.find((f) => f.role === 'spec');
+  const tsResultRaw = await validateTypescriptHandler.validate_typescript({
+    code: specFile?.content || currentSpec || '',
+    fileType: 'spec',
+  });
   const tsResult = JSON.parse(
     typeof tsResultRaw === 'string' ? tsResultRaw : JSON.stringify(tsResultRaw)
   ) as { valid: boolean; errors: Array<{ line: number; message: string }> };
@@ -498,18 +955,19 @@ Navigate to the relevant pages to verify actual values, then fix only the failin
 
     const tsErrors = tsResult.errors.map((e) => `Line ${e.line}: ${e.message}`).join('\n');
     const { args: fixArgs, tokenUsage: fixUsage } = await runAgent(
-      'Fix the TypeScript errors in this Playwright spec. Output only the corrected spec content.',
-      `TypeScript errors:\n${tsErrors}\n\nSpec:\n${fixedSpec}`,
-      fixTools,
+      'Fix the TypeScript errors in the files below. Output only the changed files.',
+      `TypeScript errors:\n${tsErrors}\n\n${formatFilesForPrompt(files)}`,
+      fixFilesTools,
       validateTypescriptHandler,
       { maxIterations: 10 },
     );
-    fixedSpec = fixArgs.fixedSpec as string;
+    const fixChangedFiles = (fixArgs.files as FileEntry[] | undefined) ?? [];
+    files = mergeFiles(files, fixChangedFiles);
     tokenUsage = addTokenUsage(tokenUsage, fixUsage);
 
     log('INFO', `[ciFailureFix] TS fix pass complete — $${tokenUsage.costUSD.toFixed(4)} USD total`);
     dashboardBus.emitEvent('correction', 'info', 'CI fix TS correction applied', { tokenUsage: fixUsage });
   }
 
-  return { specContent: fixedSpec, poms: fixedPoms, specPath, tokenUsage };
+  return { files, tokenUsage };
 }

@@ -11,8 +11,8 @@ export function ownerName(): string {
 }
 
 export function mainRepo(): string {
-  const r = process.env.GITHUB_MAIN_REPO;
-  if (!r) throw new Error('GITHUB_MAIN_REPO env var is not set');
+  const r = process.env.GH_MAIN_REPO;
+  if (!r) throw new Error('GH_MAIN_REPO env var is not set');
   return r;
 }
 
@@ -32,7 +32,7 @@ function makeJwt(appId: string, privateKey: string): string {
   return `${data}.${sig}`;
 }
 
-async function token(): Promise<string> {
+export async function token(): Promise<string> {
   const appId = process.env.GH_APP_ID;
   const privateKey = process.env.GH_PRIVATE_KEY;
   const installationId = process.env.GH_INSTALLATION_ID;

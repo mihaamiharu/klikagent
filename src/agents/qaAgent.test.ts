@@ -58,10 +58,11 @@ const mockCtx: WriterContext = {
 
 const mockWriterResult = {
   feature: 'doctors',
-  enrichedSpec: 'test("reviews", async () => {});',
-  poms: [{ pomContent: 'export class DoctorPage {}', pomPath: 'pages/doctors/DoctorPage.ts' }],
+  files: [
+    { path: 'tests/web/doctors/21-doctor-reviews.spec.ts', content: 'test("reviews", async () => {});', role: 'spec' },
+    { path: 'pages/doctors/DoctorPage.ts', content: 'export class DoctorPage {}', role: 'pom' },
+  ],
   affectedPaths: 'tests/web/doctors/',
-  fixtureUpdate: undefined,
   tokenUsage: baseTokenUsage,
 };
 
@@ -126,12 +127,13 @@ describe('runQaAgent', () => {
     expect(resolveWriterContext).toHaveBeenCalledWith('klikagent-tests', 'doctors', mockBaseCtx);
   });
 
-  it('returns enrichedSpec, poms, affectedPaths, and feature from writerAgent', async () => {
+  it('returns files, affectedPaths, and feature from writerAgent', async () => {
     const result = await runQaAgent(makeTask(), 'qa/21', 'klikagent-tests');
 
     expect(result.feature).toBe('doctors');
-    expect(result.enrichedSpec).toBe('test("reviews", async () => {});');
-    expect(result.poms[0].pomPath).toBe('pages/doctors/DoctorPage.ts');
+    expect(result.files).toHaveLength(2);
+    expect(result.files[0].path).toBe('tests/web/doctors/21-doctor-reviews.spec.ts');
+    expect(result.files[1].path).toBe('pages/doctors/DoctorPage.ts');
     expect(result.affectedPaths).toBe('tests/web/doctors/');
   });
 

@@ -87,16 +87,18 @@ ${formatWriterContext(ctx)}
 
 ## Your task
 Using the ExplorationReport above:
-1. Write a complete Playwright spec at tests/web/${report.feature}/${task.taskId}-<slug>.spec.ts
+1. Write a complete Playwright spec at tests/web/${report.feature}/${report.feature}.spec.ts
    - Import: import { test, expect } from '../../../fixtures';
    - Import: import { personas } from '../../../config/personas';
-   - Always use fixture parameters for POMs — if you create a new POM, you MUST register it in fixtures/index.ts and pass the updated file as fixtureUpdate in done()
+   - Import POM: import { ClassName } from '../../../pages/${report.feature}/ClassName'; (3 levels up from tests/web/feature/)
+   - Construct POM inline using persona fixtures (asPatient, asDoctor, asAdmin) — do NOT register feature POMs in fixtures/index.ts
    - For each missingLocator, emit a test.skip with the reason from the report
 2. Write or update the POM at pages/${report.feature}/<ClassName>.ts
    - Use ONLY locators from the ExplorationReport — never invent selectors
-3. Call validate_typescript(code, fileType: "pom") on the POM first
+3. Call validate_typescript(code, fileType: "pom") on EACH POM file separately
 4. Call validate_typescript(code, fileType: "spec") on the spec
-5. Fix any errors and re-validate. Once both pass, call done() immediately.
+5. If you need to output additional files (mock data, helpers, config updates), include them with role="extra"
+6. Fix any errors and re-validate. Once all pass, call done() immediately.
 `.trim();
 }
 
@@ -107,26 +109,26 @@ export async function runWriterAgent(
   ctx: WriterContext,
 ): Promise<{
   feature: string;
-  enrichedSpec: string;
-  poms: Array<{ pomContent: string; pomPath: string }>;
+  files: Array<{ path: string; content: string; role: string }>;
   affectedPaths: string;
-  fixtureUpdate?: string;
   tokenUsage: TokenUsage;
 }> {
   const { args, tokenUsage } = await runAgent(
     buildSystemPrompt(),
     buildUserMessage(task, branch, report, ctx),
     writerTools,
-    createWriterHandlers(),
+    createWriterHandlers(task.outputRepo),
     { maxIterations: WRITER_MAX_ITERATIONS },
   );
 
+  const rawFiles = args.files;
+  const files: Array<{ path: string; content: string; role: string }> =
+    typeof rawFiles === 'string' ? JSON.parse(rawFiles) : (rawFiles as Array<{ path: string; content: string; role: string }>) ?? [];
+
   return {
-    feature:        args.feature as string,
-    enrichedSpec:   args.enrichedSpec as string,
-    poms:           args.poms as Array<{ pomContent: string; pomPath: string }>,
-    affectedPaths:  args.affectedPaths as string,
-    fixtureUpdate:  args.fixtureUpdate as string | undefined,
+    feature:       args.feature as string,
+    files,
+    affectedPaths: args.affectedPaths as string,
     tokenUsage,
   };
 }

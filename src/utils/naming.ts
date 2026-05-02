@@ -3,11 +3,11 @@ const MAX_SLUG_LENGTH = 40;
 function slugify(text: string): string {
   return text
     .toLowerCase()
-    .replace(/[^a-z0-9\s-]/g, '')   // strip non-alphanumeric except spaces and hyphens
+    .replace(/[^a-z0-9\s-]/g, '')
     .trim()
-    .replace(/[\s-]+/g, '-')         // collapse spaces/hyphens to single hyphen
+    .replace(/[\s-]+/g, '-')
     .slice(0, MAX_SLUG_LENGTH)
-    .replace(/-+$/, '');             // strip trailing hyphens after slice
+    .replace(/-+$/, '');
 }
 
 // qa/42-short-summary
@@ -26,7 +26,7 @@ export function toPRTitle(ticketId: string, summary: string): string {
   return `[KlikAgent] ${ticketId}: ${summary}`;
 }
 
-// login-form-validation.spec.ts
-export function toSpecFileName(title: string): string {
-  return `${slugify(title)}.spec.ts`;
+// book-appointment.spec.ts — named after the feature folder
+export function toSpecFileName(feature: string): string {
+  return `${slugify(feature)}.spec.ts`;
 }
