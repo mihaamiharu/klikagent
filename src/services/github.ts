@@ -11,8 +11,8 @@ export function ownerName(): string {
 }
 
 export function mainRepo(): string {
-  const r = process.env.GITHUB_MAIN_REPO;
-  if (!r) throw new Error('GITHUB_MAIN_REPO env var is not set');
+  const r = process.env.GH_MAIN_REPO;
+  if (!r) throw new Error('GH_MAIN_REPO env var is not set');
   return r;
 }
 
