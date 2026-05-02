@@ -15,7 +15,63 @@ export interface ValidationError {
   column?: number;
   message: string;
   severity: 'error' | 'warning';
-  source: 'tsc' | 'eslint';
+  source: 'tsc' | 'eslint' | 'convention';
+}
+
+/**
+ * Banned locator patterns that are syntactically valid TypeScript but
+ * will fail at runtime. These catch common AI hallucinations before
+ * expensive tsc/eslint runs.
+ */
+const BANNED_LOCATOR_PATTERNS: Array<{ pattern: RegExp; message: string }> = [
+  {
+    pattern: /\.locator\(\s*['"]link['"]\s*\)/,
+    message: "page.locator('link') is not a valid CSS selector. Use page.getByRole('link') instead.",
+  },
+  {
+    pattern: /\.locator\(\s*['"]button['"]\s*\)/,
+    message: "page.locator('button') is too generic. Use getByRole('button', { name: '...' }) or getByTestId instead.",
+  },
+  {
+    pattern: /\.locator\(\s*['"]div['"]\s*\)/,
+    message: "page.locator('div') is too generic. Use getByRole, getByTestId, or getByText instead.",
+  },
+  {
+    pattern: /\.locator\(\s*['"]span['"]\s*\)/,
+    message: "page.locator('span') is too generic. Use getByRole, getByTestId, or getByText instead.",
+  },
+  {
+    pattern: /\.locator\(\s*['"]input['"]\s*\)/,
+    message: "page.locator('input') is too generic. Use getByRole, getByTestId, or getByLabel instead.",
+  },
+];
+
+/**
+ * Phase 0: Fast regex-based convention checks that catch AI hallucinations
+ * before expensive tsc/eslint runs. Returns errors for any banned patterns
+ * found in generated POM or spec files.
+ */
+export function runConventionCheck(files: FileEntry[]): ValidationError[] {
+  const errors: ValidationError[] = [];
+
+  for (const file of files) {
+    const lines = file.content.split('\n');
+    for (const [lineIdx, line] of lines.entries()) {
+      for (const { pattern, message } of BANNED_LOCATOR_PATTERNS) {
+        if (pattern.test(line)) {
+          errors.push({
+            filePath: file.path,
+            line: lineIdx + 1,
+            message,
+            severity: 'error',
+            source: 'convention',
+          });
+        }
+      }
+    }
+  }
+
+  return errors;
 }
 
 /**

@@ -5,7 +5,7 @@ import { runAgent, TokenUsage } from './ai';
 import { validateTypescriptHandler, validateTypescriptTool, PAGE_GETBY_IN_SPEC_PATTERN } from '../agents/tools/outputTools';
 import { qaTools, createQaHandlers, browserHandlers } from '../agents/tools';
 import { maxSelfCorrectionAttempts } from './testRepoClone';
-import { runTypecheck, runLint, ValidationError, prepareValidationDir, cleanupValidationDir } from './codeValidation';
+import { runTypecheck, runLint, runConventionCheck, ValidationError, prepareValidationDir, cleanupValidationDir } from './codeValidation';
 import { log } from '../utils/logger';
 import { dashboardBus } from '../dashboard/eventBus';
 import { AgentTool } from '../types';
@@ -634,6 +634,16 @@ export async function runWithSelfCorrection(
   const CONCURRENCY_LIMIT = 2;
   let astErrors: Array<{ path: string; line: number; message: string }> = await collectAstErrors(files);
 
+  // Phase 0: Banned locator pattern check (catches AI hallucinations before AST)
+  let conventionCheckErrors: Array<{ path: string; line: number; message: string }> = [];
+  for (const file of files) {
+    const violations = runConventionCheck([file]);
+    for (const v of violations) {
+      conventionCheckErrors.push({ path: v.filePath, line: v.line, message: v.message });
+    }
+  }
+
+  // Phase 1: Unified convention + AST loop with parallel fix agents
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     const specFile = getSpecFile(files);
     const pomFiles = getPomFiles(files);
@@ -642,21 +652,22 @@ export async function runWithSelfCorrection(
     const structuralIssues = checkStructuralIssues(files);
     const conventionErrors = [...specViolations, ...pomViolations, ...structuralIssues];
 
-    if (astErrors.length === 0 && conventionErrors.length === 0) {
+    if (astErrors.length === 0 && conventionCheckErrors.length === 0 && conventionErrors.length === 0) {
       log('INFO', `[selfCorrection] Phase 1 valid${attempt > 1 ? ` after ${attempt - 1} correction(s)` : ''}`);
       dashboardBus.emitEvent('validation', 'info', 'Phase 1 (fast) validation passed', { valid: true });
       break;
     }
 
     // Combine into a single violation list, then partition by target file.
-    // AST errors are formatted with the path prefix so extractTargetFile picks them up.
+    // AST errors and banned locator errors are formatted with the path prefix so extractTargetFile picks them up.
     const allErrors = [
       ...conventionErrors,
+      ...conventionCheckErrors.map((e) => `${e.path}: BANNED_LOCATOR line ${e.line}: ${e.message}`),
       ...astErrors.map((e) => `${e.path}: AST line ${e.line}: ${e.message}`),
     ];
 
-    log('WARN', `[selfCorrection] Phase 1 attempt ${attempt}/${maxAttempts}: ${allErrors.length} error(s) (${conventionErrors.length} convention, ${astErrors.length} AST)`);
-    dashboardBus.emitEvent('validation', 'warn', `Phase 1 attempt ${attempt}`, { conventions: conventionErrors.length, ast: astErrors.length });
+    log('WARN', `[selfCorrection] Phase 1 attempt ${attempt}/${maxAttempts}: ${allErrors.length} error(s) (${conventionErrors.length} convention, ${conventionCheckErrors.length} banned-locator, ${astErrors.length} AST)`);
+    dashboardBus.emitEvent('validation', 'warn', `Phase 1 attempt ${attempt}`, { conventions: conventionErrors.length, bannedLocators: conventionCheckErrors.length, ast: astErrors.length });
 
     if (attempt === maxAttempts) {
       log('WARN', `[selfCorrection] Phase 1 exhausted after ${maxAttempts} attempts`);
@@ -680,8 +691,15 @@ export async function runWithSelfCorrection(
     log('INFO', `[selfCorrection] Phase 1 attempt ${attempt} complete — ${successfulResults.length} agent(s) succeeded, $${roundTokenUsage.costUSD.toFixed(4)} USD`);
     dashboardBus.emitEvent('correction', 'info', `Applied Phase 1 correction ${attempt}`, { tokenUsage: roundTokenUsage, agentsSucceeded: successfulResults.length, agentsFailed: failedCount });
 
-    // Re-run AST validation against the merged file set.
+    // Re-run AST validation and banned locator check against the merged file set.
     astErrors = await collectAstErrors(files);
+    conventionCheckErrors = [];
+    for (const file of files) {
+      const violations = runConventionCheck([file]);
+      for (const v of violations) {
+        conventionCheckErrors.push({ path: v.filePath, line: v.line, message: v.message });
+      }
+    }
   }
 
   // ─── Phase 2: Slow validation (tsc + eslint) ────────────────────────────────
@@ -776,6 +794,7 @@ export async function runWithSelfCorrection(
   ];
   const errorSummary = [
     ...finalConventions.map((m) => `CONVENTION: ${m}`),
+    ...conventionCheckErrors.map((e) => `BANNED_LOCATOR: ${e.path}(${e.line}): ${e.message}`),
     ...astErrors.map((e) => `AST: ${e.path}(${e.line}): ${e.message}`),
   ].join('\n');
 
