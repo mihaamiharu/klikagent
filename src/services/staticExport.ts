@@ -1,10 +1,11 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { commitFile, ownerName, mainRepo, createBranch, getDefaultBranchSha } from './github';
+import { commitFile, ownerName, mainRepo, createBranch, getDefaultBranchSha, ghRequest } from './github';
 import { log } from '../utils/logger';
 import { Run } from '../dashboard/runStore';
 
 const DATA_FILE = path.join(__dirname, '..', '..', 'data', 'runs.json');
+let exportMutex: Promise<void> | null = null;
 
 function computeStats(runs: Run[]) {
   let totalCost = 0;
@@ -262,29 +263,63 @@ function buildHTML(runs: Run[], exportedAt: string): string {
 }
 
 export async function exportToGithubPages(): Promise<void> {
-  let runs: Run[] = [];
-  try {
-    if (fs.existsSync(DATA_FILE)) {
-      runs = JSON.parse(fs.readFileSync(DATA_FILE, 'utf-8')) as Run[];
-    }
-  } catch (err) {
-    log('WARN', `[staticExport] Failed to read runs.json: ${(err as Error).message}`);
+  if (exportMutex) {
+    await exportMutex;
   }
 
-  const exportedAt = new Date().toISOString();
-  const html = buildHTML(runs, exportedAt);
+  exportMutex = (async () => {
+    let runs: Run[] = [];
+    try {
+      if (fs.existsSync(DATA_FILE)) {
+        runs = JSON.parse(fs.readFileSync(DATA_FILE, 'utf-8')) as Run[];
+      }
+    } catch (err) {
+      log('WARN', `[staticExport] Failed to read runs.json: ${(err as Error).message}`);
+    }
 
-  const repo = mainRepo();
+    const exportedAt = new Date().toISOString();
+    const html = buildHTML(runs, exportedAt);
+
+    const repo = mainRepo();
+    const owner = ownerName();
+
+    try {
+      const branchExists = await checkBranchExists(repo, 'gh-pages');
+      if (!branchExists) {
+        await createOrphanBranch(repo, 'gh-pages');
+      }
+    } catch (err) {
+      log('WARN', `[staticExport] Branch setup: ${(err as Error).message}`);
+    }
+
+    await commitFile(repo, 'gh-pages', 'index.html', html, `chore: update dashboard snapshot [${exportedAt}]`);
+    log('INFO', `[staticExport] Dashboard published to gh-pages for ${owner}/${repo}`);
+  })();
+
+  await exportMutex;
+  exportMutex = null;
+}
+
+async function checkBranchExists(repo: string, branch: string): Promise<boolean> {
+  const res = await ghRequest(`/repos/${ownerName()}/${repo}/branches/${branch}`);
+  return res.ok;
+}
+
+async function createOrphanBranch(repo: string, branch: string): Promise<void> {
   const owner = ownerName();
 
-  // Ensure gh-pages branch exists
-  try {
-    const baseSha = await getDefaultBranchSha(repo);
-    await createBranch(repo, 'gh-pages', baseSha);
-  } catch (err) {
-    log('WARN', `[staticExport] Branch setup: ${(err as Error).message}`);
-  }
+  const treeRes = await ghRequest(`/repos/${owner}/${repo}/git/trees`, 'POST', { tree: [] });
+  if (!treeRes.ok) throw new Error(`createOrphanBranch tree: ${treeRes.status} ${await treeRes.text()}`);
+  const treeData = await treeRes.json() as { sha: string };
 
-  await commitFile(repo, 'gh-pages', 'index.html', html, `chore: update dashboard snapshot [${exportedAt}]`);
-  log('INFO', `[staticExport] Dashboard published to gh-pages for ${owner}/${repo}`);
+  const commitRes = await ghRequest(`/repos/${owner}/${repo}/git/commits`, 'POST', {
+    message: 'chore: initialize gh-pages',
+    tree: treeData.sha,
+    parents: [],
+  });
+  if (!commitRes.ok) throw new Error(`createOrphanBranch commit: ${commitRes.status} ${await commitRes.text()}`);
+  const commitData = await commitRes.json() as { sha: string };
+
+  await createBranch(repo, branch, commitData.sha);
+  log('INFO', `[staticExport] Created orphan branch ${branch} for ${owner}/${repo}`);
 }

@@ -17,10 +17,12 @@ const app = express();
 app.use(express.json());
 app.use('/', dashboardRoutes);
 
-function publishSnapshot() {
-  exportToGithubPages().catch((err: Error) =>
-    log('WARN', `[staticExport] Failed to publish snapshot: ${err.message}`)
-  );
+async function publishSnapshot() {
+  try {
+    await exportToGithubPages();
+  } catch (err) {
+    log('WARN', `[staticExport] Failed to publish snapshot: ${(err as Error).message}`);
+  }
 }
 
 function dashboardUrl(): string {
@@ -73,23 +75,23 @@ app.post('/tasks', (req: Request, res: Response) => {
   const outputRepo = task.outputRepo.includes('/') ? task.outputRepo.split('/').pop()! : task.outputRepo;
 
   runStore.startRun(task.taskId, task.taskId, task.title, 'qa-spec', { task });
-  dashboardBus.withRunId(task.taskId, () => {
-    orchestrate(task).then(() => {
+  dashboardBus.withRunId(task.taskId, async () => {
+    try {
+      await orchestrate(task);
       runStore.endRun(task.taskId, 'success');
-      publishSnapshot();
+      await publishSnapshot();
       if (issueNumber) {
-        createIssueComment(outputRepo, issueNumber, buildRunComment('success', task.taskId, task.title))
-          .catch((e: Error) => log('WARN', `[tasks] Failed to post issue comment: ${e.message}`));
+        await createIssueComment(outputRepo, issueNumber, buildRunComment('success', task.taskId, task.title));
       }
-    }).catch((err: Error) => {
-      log('ERROR', `[tasks] Unhandled error for task ${task.taskId}: ${err.message}`);
+    } catch (err) {
+      log('ERROR', `[tasks] Unhandled error for task ${task.taskId}: ${(err as Error).message}`);
       runStore.endRun(task.taskId, 'failed');
-      publishSnapshot();
+      await publishSnapshot();
       if (issueNumber) {
-        createIssueComment(outputRepo, issueNumber, buildRunComment('failed', task.taskId, task.title))
+        await createIssueComment(outputRepo, issueNumber, buildRunComment('failed', task.taskId, task.title))
           .catch((e: Error) => log('WARN', `[tasks] Failed to post issue comment: ${e.message}`));
       }
-    });
+    }
   });
 });
 
@@ -160,14 +162,14 @@ app.post('/reviews', (req: Request, res: Response) => {
       }
 
       runStore.endRun(runId, 'success');
-      publishSnapshot();
+      await publishSnapshot();
       await createIssueComment(repoName, ctx.prNumber, buildRunComment('success', runId, `Review PR #${ctx.prNumber} — Round ${round}`))
         .catch((e: Error) => log('WARN', `[reviews] Failed to post PR comment: ${e.message}`));
     } catch (err) {
       log('ERROR', `[reviews] Unhandled error for PR #${ctx.prNumber}: ${(err as Error).message}`);
       runStore.endRun(runId, 'failed');
-      publishSnapshot();
-      createIssueComment(repoName, ctx.prNumber, buildRunComment('failed', runId, `Review PR #${ctx.prNumber} — Round ${round}`))
+      await publishSnapshot();
+      await createIssueComment(repoName, ctx.prNumber, buildRunComment('failed', runId, `Review PR #${ctx.prNumber} — Round ${round}`))
         .catch((e: Error) => log('WARN', `[reviews] Failed to post PR comment: ${e.message}`));
     }
   });
@@ -196,15 +198,16 @@ app.post('/repos/provision', (req: Request, res: Response) => {
   res.status(202).json({ received: true, repoName: payload.repoName });
 
   runStore.startRun(runId, payload.repoName, `Provision repo ${payload.repoName}`, 'provision');
-  dashboardBus.withRunId(runId, () => {
-    provisionRepo(payload).then(() => {
+  dashboardBus.withRunId(runId, async () => {
+    try {
+      await provisionRepo(payload);
       runStore.endRun(runId, 'success');
-      publishSnapshot();
-    }).catch((err: Error) => {
-      log('ERROR', `[provision] Unhandled error for ${payload.repoName}: ${err.message}`);
+      await publishSnapshot();
+    } catch (err) {
+      log('ERROR', `[provision] Unhandled error for ${payload.repoName}: ${(err as Error).message}`);
       runStore.endRun(runId, 'failed');
-      publishSnapshot();
-    });
+      await publishSnapshot();
+    }
   });
 });
 

@@ -130,8 +130,8 @@ class RunStore {
   }
 
   public countRunsForPR(prNumber: number | string): number {
-    const prefix = `pr-${prNumber}-r`;
-    return Array.from(this.runs.keys()).filter(k => k.startsWith(prefix)).length;
+    const regex = new RegExp(`^pr-${prNumber}-r\\d+$`);
+    return Array.from(this.runs.keys()).filter(k => regex.test(k)).length;
   }
 
   public isRunActive(id: string): boolean {
