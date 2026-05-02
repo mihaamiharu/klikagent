@@ -121,9 +121,13 @@ export async function runWriterAgent(
     { maxIterations: WRITER_MAX_ITERATIONS },
   );
 
+  const rawFiles = args.files;
+  const files: Array<{ path: string; content: string; role: string }> =
+    typeof rawFiles === 'string' ? JSON.parse(rawFiles) : (rawFiles as Array<{ path: string; content: string; role: string }>) ?? [];
+
   return {
     feature:       args.feature as string,
-    files:         args.files as Array<{ path: string; content: string; role: string }>,
+    files,
     affectedPaths: args.affectedPaths as string,
     tokenUsage,
   };
