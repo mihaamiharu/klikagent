@@ -6,6 +6,8 @@ import { orchestrate } from '../orchestrator';
 import { QATask, CiTestFailure } from '../types';
 import { runWithCiFailureFix } from '../services/selfCorrection';
 import { commitFile } from '../services/github';
+import { exportToGithubPages } from '../services/staticExport';
+import { log } from '../utils/logger';
 
 export const dashboardRoutes = express.Router();
 
@@ -132,6 +134,25 @@ dashboardRoutes.post('/api/runs/:id/fix', (req: Request, res: Response) => {
     } catch (err) {
       runStore.endRun(fixId, 'failed');
     }
+  });
+});
+
+dashboardRoutes.delete('/api/runs/:id', async (req: Request, res: Response) => {
+  const run = runStore.getRun(req.params.id);
+  if (!run) {
+    res.status(404).json({ error: 'Run not found' });
+    return;
+  }
+  if (run.status === 'running') {
+    res.status(400).json({ error: 'Cannot delete a running task' });
+    return;
+  }
+
+  runStore.deleteRun(req.params.id);
+  res.json({ deleted: true, id: req.params.id });
+
+  exportToGithubPages().catch((err) => {
+    log('WARN', `[dashboard] Failed to sync GitHub Pages after delete: ${(err as Error).message}`);
   });
 });
 
