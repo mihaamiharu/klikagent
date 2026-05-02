@@ -15,10 +15,10 @@ You receive an ExplorationReport from a browser agent who already explored the l
 Your job is to:
 1. Read the Golden Patterns section in your context — these show the EXACT patterns to follow. Match the pattern that fits your task:
    - Pattern 1: Auth feature tests → use authPage fixture
-   - Pattern 2: Feature tests → use asPatient/asDoctor/asAdmin, construct POM inline, NO beforeEach
+   - Pattern 2: Feature tests → use fixture parameters (e.g. { doctorsPage }), NEVER construct POMs inline
    - Pattern 3: Dynamic persona data → use personas.X.displayName, never hardcode
    - Pattern 4: POM methods → add getter methods, never access locators directly in spec
-   - Pattern 5: Feature POMs NOT registered as fixtures → construct inline
+   - Pattern 5: Multi-page flows → use multiple fixture parameters
    - Pattern 6: Access control → compact tests, no POM needed
    - Pattern 7: POM structure template → readonly locators, async methods, getter methods for attributes
 2. Read the ExplorationReport carefully — especially flows, notes, and missingLocators
@@ -192,20 +192,16 @@ export const SPEC_RULES = `## Spec writing rules
 
 ## Authentication in specs — NEVER use beforeEach login
 - Feature tests (anything outside the auth feature itself) MUST NOT use beforeEach to log in.
-- The fixtures file provides persona fixtures that deliver a pre-authenticated Page via storageState:
-    asPatient — authenticated as the patient persona
-    asDoctor  — authenticated as the doctor persona
-    asAdmin   — authenticated as the admin persona
-- Use the persona fixture that matches the ExplorationReport's authPersona field.
-- Pattern: receive the persona fixture, navigate to the starting route, construct the POM inline:
-    test('patient sees sidebar link', async ({ asPatient }) => {
-      await asPatient.goto('/dashboard');
-      const pom = new BookAppointmentPage(asPatient);
-      await pom.expectBookAppointmentSidebarLinkVisible();
+- The fixtures file provides persona-specific POM fixtures (e.g. doctorsPage, patientsPage) that deliver a pre-authenticated Page via storageState.
+- Use the fixture that matches the feature and persona from the ExplorationReport.
+- Pattern: receive the fixture parameter directly in the test:
+    test('patient sees sidebar link', async ({ bookAppointmentPage }) => {
+      // ✅ bookAppointmentPage is already authenticated and initialized
+      await bookAppointmentPage.goto(); 
+      await bookAppointmentPage.expectBookAppointmentSidebarLinkVisible();
     });
 - NEVER add a beforeEach that calls authPage.gotoLogin() or authPage.login() for feature tests.
-- DO NOT register feature POMs as fixtures when using persona fixtures — construct them inline as shown above.
-- fixtureUpdate is NOT needed for feature specs using persona fixtures — omit it from done().
+- YOU MUST register every new POM as a fixture in fixtures/index.ts and pass the updated file as fixtureUpdate in done().
 - The authPage fixture is reserved for auth-specific tests only (login form, validation errors, logout).
 
 ## Tagging and reporting
@@ -227,9 +223,9 @@ export const POM_RULES = `## POM rules
 After writing a new POM, you MUST register it in fixtures/index.ts and pass the updated file as fixtureUpdate in done(). Steps:
 1. Use the fixtures content from your context
 2. Add an import for each new POM class at the top: import { ClassName } from '../pages/{feature}/ClassName';
-3. Extend the base fixture with the new POM:
+3. Extend the base fixture with the new POM, composing it with the required persona fixture (e.g. asAdmin, asPatient, asDoctor):
    const test = base.extend<{ fixtureName: ClassName }>({
-     fixtureName: async ({ page }, use) => { await use(new ClassName(page)); },
+     fixtureName: async ({ asAdmin }, use) => { await use(new ClassName(asAdmin)); },
    });
 4. Ensure export { expect } from '@playwright/test' is NOT duplicated — if expect is already imported at the top, remove the re-export or vice versa. Only one source of expect.
 5. Pass the full updated fixtures/index.ts content as fixtureUpdate in done()
@@ -252,7 +248,7 @@ export const VALIDATION_RULES = `## Playwright API rules (violations will be cau
 export const WRITER_CODE_GEN_SEQUENCE = `## Required steps — code generation
 1. Read the Golden Patterns in your context and pick the matching pattern:
    - Auth tests (login form) → Pattern 1: use authPage fixture
-   - Feature tests (any non-auth feature) → Patterns 2+5: use asPatient/asDoctor/asAdmin, construct POM inline, do NOT register in fixtures
+   - Feature tests (any non-auth feature) → Pattern 2: use fixture parameter (e.g. { doctorsPage }), register new POMs in fixtures/index.ts
    - Access control → Pattern 6: compact tests, no POM needed
 2. Apply Pattern 3: use personas.X.displayName in assertions — never hardcode display names
 3. Apply Pattern 4: add getter methods to POM for attribute access — never expose locators directly

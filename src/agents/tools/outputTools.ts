@@ -245,6 +245,14 @@ export const validateTypescriptHandler: ToolHandlers = {
         pattern: /import\s*{[^}]*}\s*from\s*['"]@playwright\/test['"]/,
         hint: 'Do not import from @playwright/test directly in spec files. Use the fixture layer: import { test, expect } from \'../../../fixtures\'',
       },
+      {
+        pattern: /import\s+{[^}]*Page}\s+from\s+['"].*\/pages\/.*['"]/,
+        hint: 'Direct POM class import found in spec. NEVER import POM classes into spec files. Register the POM as a fixture in fixtures/index.ts and use the fixture parameter instead.',
+      },
+      {
+        pattern: /new\s+\w+Page\s*\(/,
+        hint: 'Manual POM instantiation found (new XPage). NEVER instantiate POMs in specs. Use fixture parameters: test("...", async ({ doctorsPage }) => { ... })',
+      },
     ];
 
     for (const { pattern, hint } of allFilePatterns) {

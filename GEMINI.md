@@ -38,19 +38,28 @@ npm run test:watch # Run tests in watch mode
 ### 1. Code Guidelines
 - **Strict POM Encapsulation**: ALL element interactions MUST be inside a Page Object. Direct `page.locator()` or `page.getBy*` calls in spec files are forbidden (enforced by self-correction).
 - **Persona Management**: Never hardcode credentials. Use the `personas` object (e.g., `personas.admin.email`). For negative tests with invalid data, use literal strings like `'invalid@example.com'`.
-- **Fixture-First**: POMs must be registered as Playwright fixtures in `fixtures/index.ts`. Use them as test parameters: `test('...', async ({ loginPage }) => { ... })`.
+- **Fixture-First**: POMs must be registered as Playwright fixtures in `fixtures/index.ts`. Use them as test parameters: `test('...', async ({ doctorsPage }) => { ... })`. 
+  - **NEVER** instantiate POMs manually inside spec files (e.g., `const p = new PageObject(page)` is forbidden).
+  - **NEVER** import POM classes directly into spec files (enforced via fixtures).
 
-### 2. Branch & File Naming
+### 2. Reviewer Checklist (for Review Agent)
+- [ ] Are all POMs registered as fixtures?
+- [ ] Are spec files free of `new PageObject()` calls?
+- [ ] Are selectors using `getByTestId` or `ariaSnapshot` where possible?
+- [ ] Is there any hardcoded data that should be in a Persona?
+- [ ] Does `selectOption` target a standard `<select>`? (Use click-and-select for custom dropdowns).
+
+### 3. Branch & File Naming
 - **Branches**: `qa/{ticketId}-{slug}` (e.g., `qa/KA-42-login-validation`).
 - **Specs**: `tests/web/{feature}/{ticketId}.spec.ts`.
 - **POMs**: Located in `tests/poms/{feature}/`, paths derived from the class name.
 
-### 3. Agent Tool Loop
+### 4. Agent Tool Loop
 - Agents interact with the system via a tool-calling loop (max 80 iterations).
 - **Browser Tools**: `browser_navigate`, `browser_click`, `browser_fill`, `browser_snapshot`, `browser_generate_locator`.
 - **Validation**: `validate_typescript` must be called before `done()`.
 
-### 4. Label-Driven Behavior
+### 5. Label-Driven Behavior
 KlikAgent behavior is controlled via GitHub labels:
 - `klikagent`: Triggers the generation flow.
 - `scope:web` / `scope:api`: Controls crawler utilization.
