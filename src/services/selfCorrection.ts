@@ -141,12 +141,12 @@ function checkSpecConventions(specContent: string, personaMap: PersonaMap): stri
     }
   }
 
-  if (/new \w+Page\(page\)/.test(specContent)) {
+  if (/new \w+Page\(/.test(specContent)) {
     violations.push(
-      'Spec constructs a POM manually with `new PageClass(page)`. ' +
-      'After registering the POM as a fixture, use it as a test parameter instead: ' +
-      '`test("...", async ({ authPage }) => {})` — do NOT use a module-level ' +
-      '`let authPage: AuthPage` variable populated in `beforeEach`.',
+      'Spec constructs a POM manually with `new PageClass(...)`. ' +
+      'POMs MUST be registered as fixtures in `fixtures/index.ts` and used as test parameters instead: ' +
+      '`test("...", async ({ doctorsPage }) => {})`. ' +
+      'Manual instantiation is forbidden to ensure consistent authentication and state management.',
     );
   }
 
@@ -158,13 +158,13 @@ function checkSpecConventions(specContent: string, personaMap: PersonaMap): stri
     );
   }
 
+  // Feature specs must not use beforeEach to log in — use fixtures instead.
   if (/beforeEach[\s\S]{0,200}(gotoLogin|authPage\.login)/.test(specContent)) {
     violations.push(
       'Spec uses beforeEach to log in (authPage.gotoLogin / authPage.login). ' +
-      'Feature tests must use persona fixtures instead: receive `asPatient`, `asDoctor`, or `asAdmin` ' +
-      'as a test parameter — these provide a pre-authenticated Page via storageState. ' +
-      'Remove the beforeEach block and construct the POM inline: ' +
-      '`test("...", async ({ asPatient }) => { await asPatient.goto("/dashboard"); const pom = new MyPage(asPatient); ... })`.'
+      'Feature tests must use fixtures instead. Ideally, use a persona-specific POM fixture: ' +
+      '`test("...", async ({ doctorsPage }) => { await doctorsPage.goto(); ... })`. ' +
+      'Remove the beforeEach block and receive the fixture as a test parameter.'
     );
   }
 

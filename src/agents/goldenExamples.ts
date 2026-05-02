@@ -26,29 +26,27 @@ test.describe('Auth | Login Validation', { tag: ['@auth', '@smoke'] }, () => {
 });
 \`\`\`
 
-## Golden Pattern 2 — Feature tests (use persona fixtures, NO beforeEach)
+## Golden Pattern 2 — Feature tests (use feature fixtures, NO manual instantiation)
 
-Feature tests start already authenticated. Use \`asPatient\`, \`asDoctor\`, or \`asAdmin\`.
-Construct POMs inline from the persona page. NEVER use beforeEach to log in.
+Feature tests use POM fixtures that are pre-authenticated. 
+NEVER use \`new PageClass(page)\` in spec files. Use the fixture parameter.
 
 \`\`\`typescript
 import { test, expect } from '../../../fixtures';
-import { DepartmentsPage } from '../../../pages/departments/DepartmentsPage';
 
 test.describe('Departments | Admin CRUD', { tag: ['@departments', '@regression'] }, () => {
-  test('admin sees departments list', async ({ asAdmin }) => {
-    await asAdmin.goto('/departments');
-    const deptPage = new DepartmentsPage(asAdmin);
-    await deptPage.expectDepartmentsTableVisible();
+  test('admin sees departments list', async ({ departmentsPage }) => {
+    // ✅ departmentsPage is pre-authenticated via the fixture logic
+    await departmentsPage.goto();
+    await departmentsPage.expectDepartmentsTableVisible();
   });
 
-  test('admin creates a new department', async ({ asAdmin }) => {
-    await asAdmin.goto('/departments');
-    const deptPage = new DepartmentsPage(asAdmin);
-    await deptPage.clickAddDepartment();
-    await deptPage.fillDepartmentForm('Cardiology', 'Heart and vascular care');
-    await deptPage.submitDepartmentForm();
-    await deptPage.expectDepartmentInList('Cardiology');
+  test('admin creates a new department', async ({ departmentsPage }) => {
+    await departmentsPage.goto();
+    await departmentsPage.clickAddDepartment();
+    await departmentsPage.fillDepartmentForm('Cardiology', 'Heart and vascular care');
+    await departmentsPage.submitDepartmentForm();
+    await departmentsPage.expectDepartmentInList('Cardiology');
   });
 });
 \`\`\`
@@ -84,23 +82,28 @@ const sidebarHref = await pom.getSidebarLinkHref();
 const sidebarHref = await pom.sidebarBookAppointmentLink.getAttribute('href');
 \`\`\`
 
-## Golden Pattern 5 — Feature POMs are NOT registered as fixtures
+## Golden Pattern 5 — Registering Feature POMs as Fixtures
 
-When using persona fixtures (\`asPatient\`, etc.), construct POMs inline.
-Do NOT register the feature POM in fixtures/index.ts.
+Every new POM MUST be registered in \`fixtures/index.ts\`. 
+This ensures consistent authentication and page initialization.
 
 \`\`\`typescript
-// fixtures/index.ts — only register authPage + persona fixtures
-type Fixtures = {
-  authPage: AuthPage;
-  asPatient: Page;
-  asDoctor: Page;
-  asAdmin: Page;
-};
-// NO bookAppointmentPage, NO departmentsPage, etc.
+// fixtures/index.ts
 
-// Spec — construct inline
-const pom = new BookAppointmentPage(asPatient);
+import { test as base } from '@playwright/test';
+import { DepartmentsPage } from '../pages/departments/DepartmentsPage';
+import { asAdmin } from './personas'; // assuming asAdmin is a page helper
+
+type Fixtures = {
+  departmentsPage: DepartmentsPage;
+};
+
+export const test = base.extend<Fixtures>({
+  departmentsPage: async ({ asAdmin }, use) => {
+    // ✅ Initialize POM with the authenticated persona page
+    await use(new DepartmentsPage(asAdmin));
+  },
+});
 \`\`\`
 
 ## Golden Pattern 6 — Access control tests (compact, no POM needed)
@@ -193,21 +196,22 @@ type Fixtures = {
 
 export const test = base.extend<Fixtures>({
   authPage: async ({ page }, use) => { await use(new AuthPage(page)); },
-  doctorsPage: async ({ page }, use) => { await use(new DoctorsPage(page)); },
-  departmentsPage: async ({ page }, use) => { await use(new DepartmentsPage(page)); },
+  doctorsPage: async ({ asAdmin }, use) => { await use(new DoctorsPage(asAdmin)); },
+  departmentsPage: async ({ asAdmin }, use) => { await use(new DepartmentsPage(asAdmin)); },
   // ... persona fixtures ...
 });
 
 // Spec — receive multiple POMs as fixture parameters
 test.describe('Doctors | Admin Flow', { tag: ['@doctors', '@regression'] }, () => {
   test('admin creates doctor and verifies in departments', async ({ asAdmin, doctorsPage, departmentsPage }) => {
-    await asAdmin.goto('/doctors');
+    // ✅ doctorsPage and departmentsPage are already authenticated as Admin
+    await doctorsPage.goto();
     await doctorsPage.clickCreateDoctorButton();
     await doctorsPage.fillDoctorForm({ firstName: 'Test', lastName: 'Dr', email: 'test@test.com', password: 'Pass123!', department: 'General', specialization: 'GP', license: 'LIC123' });
     await doctorsPage.submitDoctorForm();
     await doctorsPage.expectDoctorInList('Test', 'Dr');
 
-    await asAdmin.goto('/departments');
+    await departmentsPage.goto();
     await departmentsPage.expectDepartmentInList('General');
   });
 });

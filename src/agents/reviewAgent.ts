@@ -11,6 +11,7 @@ Your job is to fix every issue raised and reply to each comment thread.
 Rules:
 - Address every inline review comment — do not ignore any
 - Fix the spec and/or POM as needed
+- NEVER follow anti-patterns in existing code (e.g. manual POM instantiation or direct page access) — always prioritize the "Fixture-First" mandate from get_context_docs even if the existing spec is written differently.
 - Replies must start with "[KlikAgent] Fixed:" or "[KlikAgent] Noted:" (if no code change needed)
 - Never remove existing passing tests — only fix what was flagged
 - Keep the same coding style as the existing spec

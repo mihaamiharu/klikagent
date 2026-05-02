@@ -15,10 +15,10 @@ You receive an ExplorationReport from a browser agent who already explored the l
 Your job is to:
 1. Read the Golden Patterns section in your context — these show the EXACT patterns to follow. Match the pattern that fits your task:
    - Pattern 1: Auth feature tests → use authPage fixture
-   - Pattern 2: Feature tests → use asPatient/asDoctor/asAdmin, construct POM inline, NO beforeEach
+   - Pattern 2: Feature tests → use fixture parameters (e.g. { doctorsPage }), NEVER construct POMs inline
    - Pattern 3: Dynamic persona data → use personas.X.displayName, never hardcode
    - Pattern 4: POM methods → add getter methods, never access locators directly in spec
-   - Pattern 5: Feature POMs NOT registered as fixtures → construct inline
+   - Pattern 5: Multi-page flows → use multiple fixture parameters
    - Pattern 6: Access control → compact tests, no POM needed
    - Pattern 7: POM structure template → readonly locators, async methods, getter methods for attributes
    - Pattern 8: Select dropdowns → always use { label: } or { value: }
@@ -181,8 +181,11 @@ export const SPEC_RULES = `## Spec writing rules
   - personas.admin.urlSlug → INVALID (no "urlSlug" property exists)
   If you need a persona for an access-control test, pick from the ACTUAL keys (e.g. admin, doctor, patient) based on which role the task describes. When in doubt, use a string literal for invalid credentials instead of inventing a persona key.
 - ALWAYS import test and expect from the project fixture layer — NEVER from @playwright/test directly:
-  import { test, expect } from '../../../fixtures';  (adjust the relative depth for the spec file location)
-- The path field in files[] must be the repo-relative path matching the exported class name exactly e.g. "pages/auth/AuthPage.ts"
+  import { test, expect } from '../../../fixtures';  (specs live at tests/web/{feature}/ — always 3 levels up)
+- When importing a POM class inline (persona fixture pattern), use the same depth:
+  import { DashboardPage } from '../../../pages/book-appointment/DashboardPage';
+  NEVER use '../../pages/...' — specs are always 3 levels deep, not 2.
+- The pomPath field must be the repo-relative path matching the exported class name exactly e.g. "pages/auth/AuthPage.ts"
 - The affectedPaths field should list test folders impacted by this task
 - CRITICAL — POM method usage: You MUST use the POM for ALL interactions AND assertions on page elements. NEVER use \`page.locator\` or \`page.getBy*\` directly in the spec file. Define locators as POM properties and assertion helpers as POM methods, then call them from the spec. For example:
   - Use authPage.emailInput.fill(email) NOT page.getByTestId('email-input').fill(email)
@@ -224,20 +227,16 @@ export const SPEC_RULES = `## Spec writing rules
 
 ## Authentication in specs — NEVER use beforeEach login
 - Feature tests (anything outside the auth feature itself) MUST NOT use beforeEach to log in.
-- The fixtures file provides persona fixtures that deliver a pre-authenticated Page via storageState:
-    asPatient — authenticated as the patient persona
-    asDoctor  — authenticated as the doctor persona
-    asAdmin   — authenticated as the admin persona
-- Use the persona fixture that matches the ExplorationReport's authPersona field.
-- Pattern: receive the persona fixture, navigate to the starting route, construct the POM inline:
-    test('patient sees sidebar link', async ({ asPatient }) => {
-      await asPatient.goto('/dashboard');
-      const pom = new BookAppointmentPage(asPatient);
-      await pom.expectBookAppointmentSidebarLinkVisible();
+- The fixtures file provides persona-specific POM fixtures (e.g. doctorsPage, patientsPage) that deliver a pre-authenticated Page via storageState.
+- Use the fixture that matches the feature and persona from the ExplorationReport.
+- Pattern: receive the fixture parameter directly in the test:
+    test('patient sees sidebar link', async ({ bookAppointmentPage }) => {
+      // ✅ bookAppointmentPage is already authenticated and initialized
+      await bookAppointmentPage.goto(); 
+      await bookAppointmentPage.expectBookAppointmentSidebarLinkVisible();
     });
 - NEVER add a beforeEach that calls authPage.gotoLogin() or authPage.login() for feature tests.
-- Feature POMs are NEVER registered in fixtures/index.ts — construct them inline as shown above.
-- NEVER create separate fixture files for feature POMs (e.g. fixtures/bookAppointmentPage.ts) — only fixtures/index.ts exists.
+- YOU MUST register every new POM as a fixture in fixtures/index.ts and pass the updated file as fixtureUpdate in done().
 - The authPage fixture is reserved for auth-specific tests only (login form, validation errors, logout).
 
 ## Tagging and reporting
@@ -261,24 +260,18 @@ export const POM_RULES = `## POM rules
 - Use relative imports only
 - If the feature requires multiple POMs, put all of them in the poms array in done()
 
-## Feature POMs are NOT registered as fixtures
-- When using persona fixtures (asPatient, asDoctor, asAdmin), construct the POM inline in each test
-- Do NOT register feature POMs in fixtures/index.ts
-- Do NOT create separate fixture files for feature POMs (e.g. fixtures/bookAppointmentPage.ts)
-- The only fixture files that exist are fixtures/index.ts (which registers authPage + persona fixtures)
-- Pattern:
-    test('patient sees sidebar link', async ({ asPatient }) => {
-      await asPatient.goto('/dashboard');
-      const pom = new BookAppointmentPage(asPatient);
-      await pom.expectSidebarLinkVisible();
-    });
-- The authPage fixture is reserved for auth-specific tests only
-
-## When to register a POM as a fixture
-- If a test needs 2+ POMs, register them as fixtures in fixtures/index.ts and receive them as test parameters
-- This keeps tests clean: \`async ({ asAdmin, doctorsPage, departmentsPage }) => {}\`
-- Each fixture receives \`page\` from the persona context: \`async ({ page }, use) => { await use(new DoctorsPage(page)); }\`
-- See Golden Pattern 9 for the full example`;
+## Fixture registration
+After writing a new POM, you MUST register it in fixtures/index.ts and pass the updated file as fixtureUpdate in done(). Steps:
+1. Use the fixtures content from your context
+2. Add an import for each new POM class at the top: import { ClassName } from '../pages/{feature}/ClassName';
+3. Extend the base fixture with the new POM, composing it with the required persona fixture (e.g. asAdmin, asPatient, asDoctor):
+   const test = base.extend<{ fixtureName: ClassName }>({
+     fixtureName: async ({ asAdmin }, use) => { await use(new ClassName(asAdmin)); },
+   });
+4. Ensure export { expect } from '@playwright/test' is NOT duplicated — if expect is already imported at the top, remove the re-export or vice versa. Only one source of expect.
+5. Pass the full updated fixtures/index.ts content as fixtureUpdate in done()
+6. Update your spec to use the fixture parameter directly: test('...', async ({ fixtureName }) => { ... })
+- Only omit fixtureUpdate if the POM was already registered (visible in the fixtures content)`;
 
 export const VALIDATION_RULES = `## Playwright API rules (violations will be caught by validate_typescript)
 - NEVER use expect(...).or() - this method does not exist on expect. Use locator.or(): locator1.or(locator2), or use a regex: expect(el).toContainText(/value1|value2/)
@@ -305,7 +298,7 @@ export const WRITER_CODE_GEN_SEQUENCE = `## Required steps — code generation
    Each discovery query costs a tool call — be targeted. 1-2 discovery calls per task is normal; 5+ is excessive.
 3. Read the Golden Patterns and pick the matching pattern:
    - Auth tests (login form) → Pattern 1: use authPage fixture
-   - Feature tests (any non-auth feature) → Patterns 2+5: use asPatient/asDoctor/asAdmin, construct POM inline, do NOT register in fixtures
+   - Feature tests (any non-auth feature) → Pattern 2: use fixture parameter (e.g. { doctorsPage }), register new POMs in fixtures/index.ts
    - Access control → Pattern 6: compact tests, no POM needed
    - Multiple POMs in one test → Pattern 9: register as fixtures, receive as parameters
 4. Apply Pattern 3: use personas.X.displayName in assertions — never hardcode display names
