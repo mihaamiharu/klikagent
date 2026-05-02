@@ -21,3 +21,8 @@ services:
       - DASHBOARD_PERSIST
       - PORT
       - MAX_SELF_CORRECTION_ATTEMPTS
+    volumes:
+      - klikagent-data:/app/data
+
+volumes:
+  klikagent-data:
