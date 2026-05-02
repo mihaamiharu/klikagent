@@ -74,69 +74,80 @@ export function runConventionCheck(files: FileEntry[]): ValidationError[] {
   return errors;
 }
 
-async function prepareTempClone(repoName: string, files: FileEntry[]): Promise<string> {
+/**
+ * Create a scratch directory that mirrors the source repo and symlinks
+ * `node_modules` so tsc/eslint can run against it. The directory is meant
+ * to outlive a single validation call so `tsc --incremental` can reuse its
+ * build cache across attempts within the same task.
+ *
+ * The caller owns the lifecycle — call cleanupValidationDir once Phase 2 is
+ * done (success or failure).
+ */
+export async function prepareValidationDir(repoName: string, taskId: string): Promise<string> {
   const sourceDir = getRepoDirectory(repoName);
-  const tempDir = path.join(os.tmpdir(), `klikagent-tsc-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  const safeId = taskId.replace(/[^a-zA-Z0-9_-]/g, '_');
+  const dir = path.join(os.tmpdir(), `klikagent-validate-${repoName}-${safeId}-${Date.now()}`);
 
-  log('INFO', `[codeValidation] Preparing temp clone: ${tempDir}`);
+  log('INFO', `[codeValidation] Preparing validation dir: ${dir}`);
+  await execFileAsync('cp', ['-r', sourceDir, dir], { timeout: 30000 });
 
-  // Copy repo contents (shallow copy of tracked files)
-  await execFileAsync('cp', ['-r', sourceDir, tempDir], { timeout: 30000 });
-
-  // Symlink node_modules to avoid copying
   const sourceNodeModules = path.join(sourceDir, 'node_modules');
-  const tempNodeModules = path.join(tempDir, 'node_modules');
+  const tempNodeModules = path.join(dir, 'node_modules');
   try {
     await fs.access(sourceNodeModules);
     await fs.rm(tempNodeModules, { recursive: true, force: true });
     await fs.symlink(sourceNodeModules, tempNodeModules, 'dir');
   } catch {
-    // node_modules may not exist, ignore
+    // node_modules may not exist; ignore
   }
 
-  // Write generated files into temp clone
-  for (const file of files) {
-    const filePath = path.join(tempDir, file.path);
-    await fs.mkdir(path.dirname(filePath), { recursive: true });
-    await fs.writeFile(filePath, file.content, 'utf8');
-  }
-
-  return tempDir;
+  return dir;
 }
 
-async function cleanupTempClone(tempDir: string): Promise<void> {
+export async function cleanupValidationDir(dir: string): Promise<void> {
   try {
-    await fs.rm(tempDir, { recursive: true, force: true });
-    log('INFO', `[codeValidation] Cleaned up temp clone: ${tempDir}`);
+    await fs.rm(dir, { recursive: true, force: true });
+    log('INFO', `[codeValidation] Cleaned up validation dir: ${dir}`);
   } catch (err) {
-    log('WARN', `[codeValidation] Failed to clean up temp clone ${tempDir}: ${(err as Error).message}`);
+    log('WARN', `[codeValidation] Failed to clean up ${dir}: ${(err as Error).message}`);
   }
 }
 
 /**
- * Run TypeScript compiler (`tsc --noEmit`) against the temp clone.
- * Returns parsed errors for the generated files.
+ * Overwrite the generated files inside the validation directory with the
+ * latest content. Creates parent directories as needed.
+ */
+async function writeGeneratedFiles(dir: string, files: FileEntry[]): Promise<void> {
+  for (const file of files) {
+    const filePath = path.join(dir, file.path);
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(filePath, file.content, 'utf8');
+  }
+}
+
+/**
+ * Run `tsc --noEmit --incremental` against the validation directory.
+ * The .tsbuildinfo cache lets repeat attempts within the same task skip
+ * unchanged files.
  */
 export async function runTypecheck(
-  repoName: string,
+  dir: string,
   files: FileEntry[],
 ): Promise<ValidationError[]> {
-  const tempDir = await prepareTempClone(repoName, files);
+  await writeGeneratedFiles(dir, files);
   const generatedPaths = new Set(files.map((f) => f.path));
 
   try {
-    const { stderr } = await execFileAsync('npx', ['tsc', '--noEmit'], {
-      cwd: tempDir,
-      timeout: 120000,
-    });
-    // tsc exits 0 on success, but may still print to stderr
+    const { stderr } = await execFileAsync(
+      'npx',
+      ['tsc', '--noEmit', '--incremental', '--tsBuildInfoFile', '.klikagent.tsbuildinfo'],
+      { cwd: dir, timeout: 120000 },
+    );
     return parseTscErrors(stderr || '', generatedPaths);
   } catch (err: unknown) {
     const e = err as { stdout?: string; stderr?: string; message?: string };
     const output = e.stderr || e.stdout || '';
     return parseTscErrors(output, generatedPaths);
-  } finally {
-    await cleanupTempClone(tempDir);
   }
 }
 
@@ -168,29 +179,26 @@ function parseTscErrors(output: string, generatedPaths: Set<string>): Validation
 }
 
 /**
- * Run ESLint against the generated files in the temp clone.
- * Returns parsed errors.
+ * Run ESLint against the generated files inside the validation directory.
  */
 export async function runLint(
-  repoName: string,
+  dir: string,
   files: FileEntry[],
 ): Promise<ValidationError[]> {
-  const tempDir = await prepareTempClone(repoName, files);
+  await writeGeneratedFiles(dir, files);
   const filePaths = files.map((f) => f.path);
 
   try {
     const { stdout } = await execFileAsync(
       'npx',
       ['eslint', '--format', 'json', '--no-eslintrc', ...filePaths],
-      { cwd: tempDir, timeout: 60000 },
+      { cwd: dir, timeout: 60000 },
     );
     return parseEslintJson(stdout || '[]');
   } catch (err: unknown) {
     const e = err as { stdout?: string; stderr?: string };
     // eslint exits 1 when there are errors
     return parseEslintJson(e.stdout || '[]');
-  } finally {
-    await cleanupTempClone(tempDir);
   }
 }
 
