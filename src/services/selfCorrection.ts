@@ -261,6 +261,16 @@ function checkPomConventions(pomFiles: FileEntry[], personaMap: PersonaMap): str
         break;
       }
     }
+
+    // Check for raw string selectOption calls
+    const selectOptionPattern = /\.selectOption\(\s*['"][^'"]+['"]\s*\)/;
+    if (selectOptionPattern.test(content)) {
+      violations.push(
+        `${pomPath}: selectOption() called with raw string. ` +
+        'Use an object: selectOption({ label: "..." }) or selectOption({ value: "..." }). ' +
+        'Passing a raw string will fail if the option value differs from the visible label.'
+      );
+    }
   }
 
   return violations;
