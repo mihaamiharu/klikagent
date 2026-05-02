@@ -158,10 +158,7 @@ function checkSpecConventions(specContent: string, personaMap: PersonaMap): stri
     );
   }
 
-<<<<<<< HEAD
   // Feature specs must not use beforeEach to log in — use fixtures instead.
-=======
->>>>>>> origin/main
   if (/beforeEach[\s\S]{0,200}(gotoLogin|authPage\.login)/.test(specContent)) {
     violations.push(
       'Spec uses beforeEach to log in (authPage.gotoLogin / authPage.login). ' +
