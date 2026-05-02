@@ -208,6 +208,18 @@ export const SPEC_RULES = `## Spec writing rules
 - Never use regex to avoid fixing a strict-mode violation — chain locators or use scoped selectors instead
 - URL patterns in toHaveURL() may use regex for path matching: toHaveURL(/\/dashboard/)
 
+## LOCATOR ENFORCEMENT — verbatim use of ExplorationReport locators
+- The ExplorationReport contains locators that were confirmed against the live DOM during browser exploration.
+- You MUST use these locators VERBATIM in your POM. Do NOT re-derive, simplify, or substitute them.
+- If the report says: page.getByTestId('doctor-firstName-input') — use exactly that, NOT getByLabel('First Name').
+- If the report says: page.getByRole('heading', { name: 'Create Doctor' }) — use exactly that, NOT getByTestId('doctor-form-modal').
+- If you need a locator for an element that is NOT in the ExplorationReport, do NOT guess — record it in missingLocators or use a broader getByText() as a last resort.
+- BANNED patterns (these will fail validation):
+  - page.locator('link') — 'link' is not a valid CSS selector; use page.getByRole('link') instead
+  - page.locator('button') — too generic; use getByRole('button', { name: '...' }) or getByTestId
+  - page.locator('div') — too generic; use getByRole, getByTestId, or getByText instead
+  - Any locator not present in the ExplorationReport's locators section
+
 ## Authentication in specs — NEVER use beforeEach login
 - Feature tests (anything outside the auth feature itself) MUST NOT use beforeEach to log in.
 - The fixtures file provides persona fixtures that deliver a pre-authenticated Page via storageState:
@@ -289,7 +301,7 @@ export const WRITER_CODE_GEN_SEQUENCE = `## Required steps — code generation
    - flows — map each flow to a test case
    - missingLocators — emit test.skip for each one
    - notes — understand app behavior before writing
-8. Write the spec and POMs using ONLY locators from the report
+8. Write the spec and POMs using ONLY locators from the report — copy them verbatim, do NOT re-derive or simplify
 9. Call validate_typescript(code, fileType: "pom") on EACH POM file separately
 10. Call validate_typescript(code, fileType: "spec") on the spec
 11. If valid: call done() immediately. If errors: fix and repeat from step 9.`;

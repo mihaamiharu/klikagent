@@ -5,7 +5,7 @@ import { runAgent, TokenUsage } from './ai';
 import { validateTypescriptHandler, validateTypescriptTool, PAGE_GETBY_IN_SPEC_PATTERN } from '../agents/tools/outputTools';
 import { qaTools, createQaHandlers, browserHandlers } from '../agents/tools';
 import { maxSelfCorrectionAttempts } from './testRepoClone';
-import { runTypecheck, runLint, ValidationError } from './codeValidation';
+import { runTypecheck, runLint, runConventionCheck, ValidationError } from './codeValidation';
 import { log } from '../utils/logger';
 import { dashboardBus } from '../dashboard/eventBus';
 import { AgentTool } from '../types';
@@ -637,6 +637,15 @@ export async function runWithSelfCorrection(
   }
 
   // ─── Phase 1: Fast validation (convention + AST) ────────────────────────────
+  // Phase 0: Banned locator pattern check (catches AI hallucinations before AST)
+  let conventionCheckErrors: Array<{ path: string; line: number; message: string }> = [];
+  for (const file of files) {
+    const violations = runConventionCheck([file]);
+    for (const v of violations) {
+      conventionCheckErrors.push({ path: v.filePath, line: v.line, message: v.message });
+    }
+  }
+
   // Already done above. Now run AST validation on all .ts files.
   // If AST errors exist, combine with any remaining convention errors and fix together.
   const tsFiles = files.filter((f) => f.path.endsWith('.ts'));
@@ -664,7 +673,7 @@ export async function runWithSelfCorrection(
     const structuralIssues = checkStructuralIssues(files);
     const conventionErrors = [...specViolations, ...pomViolations, ...structuralIssues];
 
-    if (astErrors.length === 0 && conventionErrors.length === 0) {
+    if (astErrors.length === 0 && conventionCheckErrors.length === 0 && conventionErrors.length === 0) {
       log('INFO', `[selfCorrection] Phase 1 valid${attempt > 1 ? ` after ${attempt - 1} correction(s)` : ''}`);
       dashboardBus.emitEvent('validation', 'info', 'Phase 1 (fast) validation passed', { valid: true });
       break;
@@ -672,6 +681,7 @@ export async function runWithSelfCorrection(
 
     const combinedErrors = [
       ...conventionErrors.map((m) => `CONVENTION: ${m}`),
+      ...conventionCheckErrors.map((e) => `BANNED_LOCATOR: ${e.path}(${e.line}): ${e.message}`),
       ...astErrors.map((e) => `AST: ${e.path}(${e.line}): ${e.message}`),
     ].join('\n');
 
@@ -713,6 +723,15 @@ export async function runWithSelfCorrection(
         for (const err of tsResult.errors) {
           astErrors.push({ path: file.path, line: err.line, message: err.message });
         }
+      }
+    }
+
+    // Re-run banned locator check after fix
+    conventionCheckErrors = [];
+    for (const file of files) {
+      const violations = runConventionCheck([file]);
+      for (const v of violations) {
+        conventionCheckErrors.push({ path: v.filePath, line: v.line, message: v.message });
       }
     }
   }
@@ -797,6 +816,7 @@ Output only the changed files.`,
   ];
   const errorSummary = [
     ...finalConventions.map((m) => `CONVENTION: ${m}`),
+    ...conventionCheckErrors.map((e) => `BANNED_LOCATOR: ${e.path}(${e.line}): ${e.message}`),
     ...astErrors.map((e) => `AST: ${e.path}(${e.line}): ${e.message}`),
   ].join('\n');
 
