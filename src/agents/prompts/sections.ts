@@ -21,6 +21,8 @@ Your job is to:
    - Pattern 5: Feature POMs NOT registered as fixtures → construct inline
    - Pattern 6: Access control → compact tests, no POM needed
    - Pattern 7: POM structure template → readonly locators, async methods, getter methods for attributes
+   - Pattern 8: Select dropdowns → always use { label: } or { value: }
+   - Pattern 9: Multiple POMs → register as fixtures in fixtures/index.ts, receive as test parameters
 2. Read the ExplorationReport carefully — especially flows, notes, and missingLocators
 3. Write a complete, runnable Playwright spec using ONLY locators from the report
 4. Write or update the Page Object Model for the feature
@@ -241,7 +243,13 @@ export const SPEC_RULES = `## Spec writing rules
 ## Tagging and reporting
 - Add Playwright tags to every test using the format: test(..., { tag: ['@tag1', '@tag2'] })
 - Minimum tags: feature tag (e.g. @auth, @dashboard) + test type (choose from @smoke, @regression, @full)
-- Tag the describe block: test.describe('Group | Subgroup', { tag: '...' })`;
+- Tag the describe block: test.describe('Group | Subgroup', { tag: '...' })
+
+## Select dropdowns — always use { label: } or { value: }
+- selectOption() requires an object with label or value — never pass a raw string.
+  BAD:  await this.departmentSelect.selectOption('Cardiology');
+  GOOD: await this.departmentSelect.selectOption({ label: 'Cardiology' });
+  GOOD: await this.departmentSelect.selectOption({ value: 'cardiology' });`;
 
 export const POM_RULES = `## POM rules
 - ALWAYS import 'expect' from '@playwright/test' in any POM that uses assertions:
@@ -264,7 +272,13 @@ export const POM_RULES = `## POM rules
       const pom = new BookAppointmentPage(asPatient);
       await pom.expectSidebarLinkVisible();
     });
-- The authPage fixture is reserved for auth-specific tests only`;
+- The authPage fixture is reserved for auth-specific tests only
+
+## When to register a POM as a fixture
+- If a test needs 2+ POMs, register them as fixtures in fixtures/index.ts and receive them as test parameters
+- This keeps tests clean: \`async ({ asAdmin, doctorsPage, departmentsPage }) => {}\`
+- Each fixture receives \`page\` from the persona context: \`async ({ page }, use) => { await use(new DoctorsPage(page)); }\`
+- See Golden Pattern 9 for the full example`;
 
 export const VALIDATION_RULES = `## Playwright API rules (violations will be caught by validate_typescript)
 - NEVER use expect(...).or() - this method does not exist on expect. Use locator.or(): locator1.or(locator2), or use a regex: expect(el).toContainText(/value1|value2/)
@@ -293,9 +307,11 @@ export const WRITER_CODE_GEN_SEQUENCE = `## Required steps — code generation
    - Auth tests (login form) → Pattern 1: use authPage fixture
    - Feature tests (any non-auth feature) → Patterns 2+5: use asPatient/asDoctor/asAdmin, construct POM inline, do NOT register in fixtures
    - Access control → Pattern 6: compact tests, no POM needed
+   - Multiple POMs in one test → Pattern 9: register as fixtures, receive as parameters
 4. Apply Pattern 3: use personas.X.displayName in assertions — never hardcode display names
 5. Apply Pattern 4: add getter methods to POM for attribute access — never expose locators directly
 6. Apply Pattern 7: POM structure — readonly locators in constructor, async methods, explicit return types
+7. Apply Pattern 8: selectOption({ label: ... }) — never pass raw string to selectOption
 7. Read the ExplorationReport:
    - locators (grouped by route) — these are the ONLY selectors you may use
    - flows — map each flow to a test case

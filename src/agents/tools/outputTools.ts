@@ -228,6 +228,14 @@ export const validateTypescriptHandler: ToolHandlers = {
         pattern: /expect\([^)]+\)\.(toContainText|toHaveText|toBeVisible|toBeDisabled|toBeEnabled|toHaveValue)\([^)]*\)\.or\(/,
         hint: 'expect(...).or() is not valid Playwright — use locator.or(otherLocator) on the locator itself, or use a regex in toContainText(/a|b/)',
       },
+      {
+        pattern: /['"]Password123!['"]/,
+        hint: 'Hardcoded password detected. Use personas.X.password from the personas config instead of a literal string.',
+      },
+      {
+        pattern: /\.selectOption\(\s*['"][^'"]+['"]\s*\)/,
+        hint: 'selectOption() called with raw string. Use an object: selectOption({ label: "..." }) or selectOption({ value: "..." }).',
+      },
     ];
 
     // Checks that apply to spec files only
