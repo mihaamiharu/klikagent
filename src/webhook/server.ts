@@ -5,16 +5,46 @@ import { orchestrate } from '../orchestrator';
 import { runReviewAgent } from '../agents/reviewAgent';
 import { provisionRepo } from '../services/repoProvisioner';
 import { ensureRepo } from '../services/localRepo';
-import { commitFile, replyToReviewComment } from '../services/github';
+import { commitFile, replyToReviewComment, createIssueComment, ownerName, mainRepo } from '../services/github';
 import { log } from '../utils/logger';
 import { dashboardRoutes } from '../dashboard/routes';
 import { runStore } from '../dashboard/runStore';
 
 import { dashboardBus } from '../dashboard/eventBus';
+import { exportToGithubPages } from '../services/staticExport';
 
 const app = express();
 app.use(express.json());
 app.use('/', dashboardRoutes);
+
+function publishSnapshot() {
+  exportToGithubPages().catch((err: Error) =>
+    log('WARN', `[staticExport] Failed to publish snapshot: ${err.message}`)
+  );
+}
+
+function dashboardUrl(): string {
+  try {
+    return `https://${ownerName()}.github.io/${mainRepo()}/`;
+  } catch {
+    return '';
+  }
+}
+
+function buildRunComment(status: 'success' | 'failed', runId: string, label: string): string {
+  const url = dashboardUrl();
+  const icon = status === 'success' ? '✅' : '❌';
+  const lines = [
+    `${icon} **KlikAgent** finished — **${status.toUpperCase()}**`,
+    ``,
+    `> ${label}`,
+    ``,
+  ];
+  if (url) {
+    lines.push(`📊 [View agent logs on dashboard](${url})`);
+  }
+  return lines.join('\n');
+}
 
 // ─── POST /tasks ──────────────────────────────────────────────────────────────
 // Trigger services call this endpoint with a normalized QATask payload.
@@ -37,13 +67,28 @@ app.post('/tasks', (req: Request, res: Response) => {
   log('INFO', `POST /tasks — task=${task.taskId} title="${task.title}"`);
   res.status(202).json({ received: true, taskId: task.taskId });
 
+  const issueUrl = (task.metadata as { issueUrl?: string } | undefined)?.issueUrl ?? '';
+  const issueMatch = issueUrl.match(/\/issues\/(\d+)$/);
+  const issueNumber = issueMatch ? parseInt(issueMatch[1], 10) : null;
+  const outputRepo = task.outputRepo.includes('/') ? task.outputRepo.split('/').pop()! : task.outputRepo;
+
   runStore.startRun(task.taskId, task.taskId, task.title, 'qa-spec', { task });
   dashboardBus.withRunId(task.taskId, () => {
     orchestrate(task).then(() => {
       runStore.endRun(task.taskId, 'success');
+      publishSnapshot();
+      if (issueNumber) {
+        createIssueComment(outputRepo, issueNumber, buildRunComment('success', task.taskId, task.title))
+          .catch((e: Error) => log('WARN', `[tasks] Failed to post issue comment: ${e.message}`));
+      }
     }).catch((err: Error) => {
       log('ERROR', `[tasks] Unhandled error for task ${task.taskId}: ${err.message}`);
       runStore.endRun(task.taskId, 'failed');
+      publishSnapshot();
+      if (issueNumber) {
+        createIssueComment(outputRepo, issueNumber, buildRunComment('failed', task.taskId, task.title))
+          .catch((e: Error) => log('WARN', `[tasks] Failed to post issue comment: ${e.message}`));
+      }
     });
   });
 });
@@ -60,7 +105,8 @@ app.post('/reviews', (req: Request, res: Response) => {
     return;
   }
 
-  const runId = `pr-${body.prNumber}`;
+  const round = runStore.countRunsForPR(body.prNumber) + 1;
+  const runId = `pr-${body.prNumber}-r${round}`;
   if (runStore.isRunActive(runId)) {
     log('WARN', `POST /reviews — PR #${body.prNumber} is already being reviewed. Skipping duplicate.`);
     res.status(409).json({ error: 'Review already in progress', prNumber: body.prNumber });
@@ -89,7 +135,7 @@ app.post('/reviews', (req: Request, res: Response) => {
 
   const repoName = ctx.outputRepo.includes('/') ? ctx.outputRepo.split('/').pop()! : ctx.outputRepo;
 
-  runStore.startRun(runId, ctx.ticketId, `Review PR #${ctx.prNumber}`, 'review');
+  runStore.startRun(runId, ctx.ticketId, `Review PR #${ctx.prNumber} — Round ${round}`, 'review');
   dashboardBus.withRunId(runId, async () => {
     try {
       await ensureRepo(repoName);
@@ -114,9 +160,15 @@ app.post('/reviews', (req: Request, res: Response) => {
       }
 
       runStore.endRun(runId, 'success');
+      publishSnapshot();
+      await createIssueComment(repoName, ctx.prNumber, buildRunComment('success', runId, `Review PR #${ctx.prNumber} — Round ${round}`))
+        .catch((e: Error) => log('WARN', `[reviews] Failed to post PR comment: ${e.message}`));
     } catch (err) {
       log('ERROR', `[reviews] Unhandled error for PR #${ctx.prNumber}: ${(err as Error).message}`);
       runStore.endRun(runId, 'failed');
+      publishSnapshot();
+      createIssueComment(repoName, ctx.prNumber, buildRunComment('failed', runId, `Review PR #${ctx.prNumber} — Round ${round}`))
+        .catch((e: Error) => log('WARN', `[reviews] Failed to post PR comment: ${e.message}`));
     }
   });
 });
@@ -147,9 +199,11 @@ app.post('/repos/provision', (req: Request, res: Response) => {
   dashboardBus.withRunId(runId, () => {
     provisionRepo(payload).then(() => {
       runStore.endRun(runId, 'success');
+      publishSnapshot();
     }).catch((err: Error) => {
       log('ERROR', `[provision] Unhandled error for ${payload.repoName}: ${err.message}`);
       runStore.endRun(runId, 'failed');
+      publishSnapshot();
     });
   });
 });
