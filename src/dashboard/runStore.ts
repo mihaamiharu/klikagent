@@ -129,6 +129,11 @@ class RunStore {
     }
   }
 
+  public countRunsForPR(prNumber: number | string): number {
+    const prefix = `pr-${prNumber}-r`;
+    return Array.from(this.runs.keys()).filter(k => k.startsWith(prefix)).length;
+  }
+
   public isRunActive(id: string): boolean {
     const run = this.runs.get(id);
     return run?.status === 'running';

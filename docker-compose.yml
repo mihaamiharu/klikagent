@@ -13,6 +13,7 @@ services:
       - GH_PRIVATE_KEY
       - GH_INSTALLATION_ID
       - GITHUB_OWNER
+      - GH_MAIN_REPO
       - GITHUB_TEST_REPO
       - QA_ENV_URL
       - QA_ADMIN_EMAIL
