@@ -376,6 +376,26 @@ function partitionViolationsByFile(violations: string[], files: FileEntry[]): Fi
 }
 
 /**
+ * Partition Phase 2 (tsc + eslint) errors by target file path.
+ * Each error is formatted as "[tsc] line 12,5: message" so the fix agent
+ * sees the same shape it would have seen in the single-prompt version.
+ * Errors whose filePath isn't one of the generated files (e.g. resolved tsc
+ * paths in node_modules) are dropped — we can't fix those.
+ */
+function partitionPhase2Errors(errors: ValidationError[], files: FileEntry[]): FileFixTask[] {
+  const knownPaths = new Set(files.map((f) => f.path));
+  const byPath = new Map<string, string[]>();
+  for (const e of errors) {
+    if (!knownPaths.has(e.filePath)) continue;
+    const formatted = `[${e.source}] line ${e.line}${e.column ? `,${e.column}` : ''}: ${e.message}`;
+    const existing = byPath.get(e.filePath) ?? [];
+    existing.push(formatted);
+    byPath.set(e.filePath, existing);
+  }
+  return Array.from(byPath.entries()).map(([filePath, violations]) => ({ filePath, violations }));
+}
+
+/**
  * Build the context files for a fix agent: the target file + the spec file.
  */
 function buildContextForTask(task: FileFixTask, files: FileEntry[]): FileEntry[] {
@@ -701,36 +721,31 @@ export async function runWithSelfCorrection(
         return { feature, files, affectedPaths, tokenUsage, warned: false };
       }
 
-      const errorSummary = allPhase2Errors
-        .map((e) => `[${e.source}] ${e.filePath}(${e.line}${e.column ? `,${e.column}` : ''}): ${e.message}`)
-        .join('\n');
-
-      log('WARN', `[selfCorrection] Phase 2 errors on attempt ${attempt}/${maxAttempts}:\n${errorSummary}`);
+      log('WARN', `[selfCorrection] Phase 2 attempt ${attempt}/${maxAttempts}: ${allPhase2Errors.length} error(s)`);
       dashboardBus.emitEvent('validation', 'warn', 'Phase 2 errors found', { errors: allPhase2Errors });
 
       if (attempt === maxAttempts) break;
 
-      const { args, tokenUsage: fixUsage } = await runAgent(
-        `Fix the TypeScript and/or ESLint errors in the files below. The project typechecker and linter found these errors:
-${errorSummary}
+      const phase2Tasks = partitionPhase2Errors(allPhase2Errors, files);
+      if (phase2Tasks.length === 0) {
+        log('WARN', '[selfCorrection] Phase 2 errors do not map to any generated file — cannot fix');
+        break;
+      }
+      log('INFO', `[selfCorrection] Phase 2 partitioned into ${phase2Tasks.length} parallel fix task(s)`);
 
-You may need to:
-- Correct import paths
-- Fix type signatures
-- Update method calls to match existing interfaces
-- Resolve ESLint rule violations
+      const results = await runParallelFixRound(phase2Tasks, files, personaMap, CONCURRENCY_LIMIT);
+      const successfulResults = results.filter((r) => r.success && r.changedFiles.length > 0);
+      const failedCount = results.length - successfulResults.length;
+      const roundTokenUsage = results.reduce((acc, r) => addTokenUsage(acc, r.tokenUsage), { promptTokens: 0, completionTokens: 0, totalTokens: 0, costUSD: 0 });
+      tokenUsage = addTokenUsage(tokenUsage, roundTokenUsage);
 
-Output only the changed files.`,
-        `ERRORS:\n${errorSummary}\n\n${formatFilesForPrompt(files)}`,
-        fixFilesTools,
-        validateTypescriptHandler,
-        { maxIterations: 10 },
-      );
-      tokenUsage = addTokenUsage(tokenUsage, fixUsage);
-      const changedFiles = (args.files as FileEntry[] | undefined) ?? [];
-      files = mergeFiles(files, changedFiles);
-      log('INFO', `[selfCorrection] Applied Phase 2 correction ${attempt}`);
-      dashboardBus.emitEvent('correction', 'info', `Applied Phase 2 correction ${attempt}`, { tokenUsage: fixUsage });
+      files = mergeFixResults(files, results);
+
+      if (failedCount > 0) {
+        log('WARN', `[selfCorrection] ${failedCount} Phase 2 fix agent(s) failed in attempt ${attempt} — errors will be retried next attempt`);
+      }
+      log('INFO', `[selfCorrection] Phase 2 attempt ${attempt} complete — ${successfulResults.length} agent(s) succeeded, $${roundTokenUsage.costUSD.toFixed(4)} USD`);
+      dashboardBus.emitEvent('correction', 'info', `Applied Phase 2 correction ${attempt}`, { tokenUsage: roundTokenUsage, agentsSucceeded: successfulResults.length, agentsFailed: failedCount });
     }
   }
 
