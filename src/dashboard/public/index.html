@@ -284,7 +284,7 @@
     
     function renderRunsList(runs) {
       elRuns.innerHTML = runs.map(run => `
-        <div class="run-item ${run.id === activeRunId ? 'active' : ''}">
+        <div class="run-item ${run.id === activeRunId ? 'active' : ''}" data-run-id="${run.id}">
           <div class="run-info" onclick="selectRun('${run.id}')">
             <div class="run-title">${run.title}</div>
             <div class="run-meta">
@@ -301,9 +301,8 @@
     
     async function selectRun(id) {
       activeRunId = id;
-      // Re-render list to show active state
       Array.from(elRuns.children).forEach(el => el.classList.remove('active'));
-      const target = Array.from(elRuns.children).find(el => el.getAttribute('onclick').includes(id));
+      const target = Array.from(elRuns.children).find(el => el.dataset.runId === id);
       if (target) target.classList.add('active');
       
       // Load details
